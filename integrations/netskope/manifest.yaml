@@ -4,8 +4,13 @@ category: collector
 description: "Pull events and alerts from a Netskope tenant via the REST API v2 Data Export iterator"
 icon: cloud
 author: nano
-version: 1
-changelog: "v1: initial release — nine dataexport event streams over the v2 iterator API."
+version: 2
+changelog: >-
+  v2: TENANT_HOST is declared field_type: hostname, which is what opts it into
+  the outbound host policy (NAN-2201). Without it the tenant host is not
+  admitted to the sandbox allowlist and every request is denied. Behavioural
+  fix — reinstall or update to pick it up.
+  v1: initial release — nine dataexport event streams over the v2 iterator API.
 
 auth_type: api_key_header
 auth:
