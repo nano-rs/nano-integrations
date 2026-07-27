@@ -41,6 +41,13 @@ curl -X POST https://<your-nano>/api/marketplace/repos \
 | Integration | Vendor | Auth | Streams |
 |---|---|---|---|
 | `netskope` | Netskope | API token | alert · page · application · audit · network · connection · incident · infrastructure · endpoint |
+| `slack` | Slack | User token (`admin` scope) | access_logs |
+
+`slack` needs only a Pro or Business+ workspace — the Enterprise-Grid-only
+Audit Logs API is a different endpoint. Note that `team.accessLogs` returns
+mutable aggregate records rather than an append-only event stream, so
+re-delivery is guaranteed rather than incidental; see the collector's header
+comment.
 
 ## Layout
 

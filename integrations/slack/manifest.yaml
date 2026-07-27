@@ -1,0 +1,59 @@
+name: Slack
+slug: slack
+category: collector
+description: "Pull workspace sign-in records from Slack's access logs — user, IP, device, ISP and geo"
+icon: message-square
+author: nano
+version: 1
+changelog: "v1: initial release — team.accessLogs sign-in records."
+
+auth_type: bearer
+auth:
+  credential_field: USER_TOKEN
+
+requires_credential: required
+credential_fields:
+  - name: USER_TOKEN
+    label: User token
+    field_type: secret
+    required: true
+    help: >-
+      A Slack *user* token (starts with xoxp-) carrying the `admin` scope. Create
+      an app at api.slack.com/apps, add `admin` under User Token Scopes, install
+      it to your workspace, and copy the User OAuth Token. A bot token (xoxb-)
+      will not work — access logs are only readable with a user token.
+
+config_fields:
+  - name: TEAM_ID
+    label: Team ID
+    field_type: string
+    required: false
+    placeholder: "T0123456789"
+    help: >-
+      Only needed for org-level tokens on Enterprise Grid, to say which workspace
+      to read. Leave blank for a normal workspace token.
+
+# Fixed host — Slack is not per-tenant, so there is nothing to template and no
+# suffix allowlist is needed.
+allowed_domains:
+  - slack.com
+
+streams:
+  - id: access_logs
+    label: Sign-in records
+    source_type: slack_access_log
+    default: true
+    description: "Who signed in, from which IP, device and network"
+
+config:
+  # Tier 2 rate limit is ~20 requests/minute, and the whole workspace's sign-in
+  # history is a few pages. Hourly is plenty; polling harder just burns quota
+  # against records that barely change.
+  poll_schedule: "0 * * * *"
+  max_run_secs: 300
+  max_events_per_emit: 1000
+
+tags:
+  - saas
+  - authentication
+  - slack
