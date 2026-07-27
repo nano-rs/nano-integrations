@@ -5,12 +5,21 @@
 //   https://github.com/netskopeoss/Data-Schema   (field definitions)
 //
 // The iterator API keeps the read position SERVER-side, keyed by the `index`
-// query parameter. That means our cursor is not an offset — it is just a flag
-// recording whether we have already opened the iterator. On first contact we
-// send `operation=<epoch seconds>` to position it; from then on `operation=next`
-// walks forward and Netskope remembers where we were.
+// query parameter, and it ADVANCES WHEN A PAGE IS SERVED. That single fact
+// drives the cursor design here, and makes this collector meaningfully
+// different from one over a client-side watermark (see google_workspace, where
+// the cursor is a timestamp we own and can rewind freely).
 //
-// Consequences worth knowing before editing:
+// Because the position is theirs, a page we fetch but fail to ship is gone —
+// the index has already moved past it. So the cursor records not "where we are"
+// but "what state the last page is in":
+//
+//   undefined  -> iterator not open; position it with `operation=<epoch>`
+//   "open"     -> last page fetched AND emitted; walk on with `operation=next`
+//   "resend"   -> a page was fetched but never confirmed; re-serve it with
+//                 `operation=resend`, which does NOT advance the index
+//
+// Other consequences worth knowing before editing:
 //
 //   * Two consumers sharing an index name steal each other's events. The index
 //     name is operator-configurable for exactly this reason.
@@ -49,8 +58,21 @@ const SERVER_ERROR_BACKOFF_MS = 5_000;
 
 const MAX_SERVER_ERROR_RETRIES = 3;
 
-/** Marker written to the cursor once an iterator has been positioned. */
+/**
+ * Cursor states.
+ *
+ * Netskope's read position lives on THEIR side and advances when a page is
+ * served — unlike a client-side watermark, we cannot rewind it by remembering a
+ * timestamp. So a page that is fetched but not successfully shipped is lost
+ * unless the next request explicitly asks for it again.
+ *
+ * `OPEN`   — the last page was fetched AND emitted. Safe to walk forward.
+ * `RESEND` — a page was fetched but not confirmed. The next request must be
+ *            `operation=resend`, which re-serves the last page WITHOUT
+ *            advancing the index.
+ */
 const CURSOR_OPEN = "open";
+const CURSOR_RESEND = "resend";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -191,9 +213,11 @@ async function fetchPage(
  * Drain one stream until it runs dry, the run budget expires, or an error is
  * thrown.
  *
- * The emit → checkpoint ordering is the delivery contract: a crash between the
- * two re-delivers the last page on the next run, which is the tolerable
- * failure. Checkpointing first would drop it silently.
+ * The checkpoint("resend") → emit → checkpoint("open") sequence is the delivery
+ * contract. Marking the page in flight BEFORE shipping it is what makes a crash
+ * recoverable: with a server-side index, "no checkpoint" is not the same as "no
+ * progress" — Netskope has already moved on, so only an explicit `resend` gets
+ * the page back.
  */
 async function collectStream(
   ctx: CollectorContext,
@@ -203,13 +227,20 @@ async function collectStream(
   let collected = 0;
   let attempt = 0;
 
-  // A cursor of CURSOR_OPEN means Netskope already holds our position, so we
-  // walk forward. Anything else (including undefined) means we must position
-  // the iterator first.
+  // CURSOR_RESEND means a previous run fetched a page it never confirmed —
+  // re-serve that page rather than walking past it. CURSOR_OPEN means the last
+  // page was fully shipped. Anything else means the iterator is not open yet.
+  const saved = ctx.cursors[stream];
   let operation =
-    ctx.cursors[stream] === CURSOR_OPEN
-      ? "next"
-      : String(startEpochSeconds(ctx));
+    saved === CURSOR_RESEND
+      ? CURSOR_RESEND
+      : saved === CURSOR_OPEN
+        ? "next"
+        : String(startEpochSeconds(ctx));
+
+  // True once Netskope holds a position for this index, which is what makes
+  // `resend` a legal request.
+  let iteratorOpen = saved === CURSOR_OPEN || saved === CURSOR_RESEND;
 
   if (operation !== "next") {
     ctx.log("Opening iterator", { stream, fromEpoch: operation });
@@ -219,17 +250,25 @@ async function collectStream(
     const body = await fetchPage(ctx, host, stream, operation, attempt);
 
     if (body === null) {
-      // Backed off inside fetchPage. Retry the SAME operation: if we were
-      // positioning the iterator, re-positioning is idempotent; if we were
-      // walking, `next` has not advanced because the request never landed.
+      // Backed off inside fetchPage. A 5xx means the request DID reach
+      // Netskope and may have advanced the index, so walking on with `next`
+      // would skip a page. `resend` re-serves the last one without advancing.
+      // Re-positioning by epoch stays idempotent while the iterator is closed.
       attempt += 1;
+      if (iteratorOpen) operation = CURSOR_RESEND;
       continue;
     }
     attempt = 0;
+    iteratorOpen = true;
 
     const events = Array.isArray(body.result) ? body.result : [];
 
     if (events.length > 0) {
+      // Mark the page in flight BEFORE shipping it. If the run dies between
+      // here and the emit ack, the next run resends this page instead of
+      // walking past it — the whole point, since Netskope will not re-serve a
+      // page the index has already passed.
+      await ctx.checkpoint(stream, CURSOR_RESEND);
       await ctx.emit(stream, events);
       await ctx.checkpoint(stream, CURSOR_OPEN);
       collected += events.length;

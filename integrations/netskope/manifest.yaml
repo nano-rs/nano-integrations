@@ -4,8 +4,12 @@ category: collector
 description: "Pull events and alerts from a Netskope tenant via the REST API v2 Data Export iterator"
 icon: cloud
 author: nano
-version: 2
+version: 3
 changelog: >-
+  v3: fetched-but-unconfirmed pages are now re-served with operation=resend
+  instead of being walked past. Netskope's read position is server-side and
+  advances when a page is served, so a page whose emit failed was previously
+  lost permanently — the index had already moved on. DATA-LOSS FIX; update.
   v2: TENANT_HOST is declared field_type: hostname, which is what opts it into
   the outbound host policy (NAN-2201). Without it the tenant host is not
   admitted to the sandbox allowlist and every request is denied. Behavioural
