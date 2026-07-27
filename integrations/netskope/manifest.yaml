@@ -1,0 +1,106 @@
+name: Netskope
+slug: netskope
+category: collector
+description: "Pull events and alerts from a Netskope tenant via the REST API v2 Data Export iterator"
+icon: cloud
+author: nano
+version: 1
+changelog: "v1: initial release — nine dataexport event streams over the v2 iterator API."
+
+auth_type: api_key_header
+auth:
+  header_name: Netskope-API-Token
+  credential_field: API_TOKEN
+
+requires_credential: required
+credential_fields:
+  - name: API_TOKEN
+    label: API Token
+    field_type: secret
+    required: true
+    help: >-
+      Netskope UI → Settings → Administration → Administrators → Service Account.
+      Create a REST API v2 token and grant it read access to each
+      /api/v2/events/dataexport/events/* endpoint you enable below — the token
+      is scoped per endpoint, and a missing grant returns 403 for that stream
+      only.
+
+config_fields:
+  - name: TENANT_HOST
+    label: Tenant hostname
+    field_type: string
+    required: true
+    placeholder: "acme.goskope.com"
+    help: >-
+      Your Netskope tenant hostname, without scheme or path. Find it in the URL
+      you use to log in to the Netskope admin console.
+  - name: INDEX_NAME
+    label: Iterator name
+    field_type: string
+    required: false
+    placeholder: "nano"
+    help: >-
+      Netskope tracks read position server-side under this name. Leave as
+      "nano" unless another consumer already uses it — two consumers sharing an
+      iterator name will steal each other's events.
+
+allowed_domain_suffixes:
+  - ".goskope.com"
+
+streams:
+  - id: alert
+    label: Alerts
+    source_type: netskope_alert
+    default: true
+    description: "Policy, DLP, malware, anomaly and compromised-credential alerts"
+  - id: application
+    label: Application events
+    source_type: netskope_application
+    default: true
+    description: "Sanctioned and shadow-IT app activity, including file operations"
+  - id: network
+    label: Network events
+    source_type: netskope_network
+    default: true
+    description: "Netskope Private Access and firewall-level connection records"
+  - id: audit
+    label: Audit events
+    source_type: netskope_audit
+    default: true
+    description: "Administrator actions in the Netskope tenant"
+  - id: page
+    label: Page events
+    source_type: netskope_page
+    default: false
+    description: "Per-page web browsing records. High volume — enable deliberately."
+  - id: connection
+    label: Connection events
+    source_type: netskope_connection
+    default: false
+    description: "Per-connection records. High volume — enable deliberately."
+  - id: incident
+    label: Incidents
+    source_type: netskope_incident
+    default: false
+    description: "DLP and threat-protection incident records"
+  - id: infrastructure
+    label: Infrastructure events
+    source_type: netskope_infrastructure
+    default: false
+    description: "Netskope infrastructure and tunnel health"
+  - id: endpoint
+    label: Endpoint events
+    source_type: netskope_endpoint
+    default: false
+    description: "Endpoint DLP events from the Netskope client"
+
+config:
+  poll_schedule: "*/5 * * * *"
+  max_run_secs: 900
+  max_events_per_emit: 10000
+
+tags:
+  - casb
+  - sse
+  - dlp
+  - netskope

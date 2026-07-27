@@ -1,0 +1,52 @@
+name: Throughput Harness
+slug: _throughput_harness
+category: collector
+description: "TESTING ONLY — measures the nano-side collector ceiling with no vendor in the loop"
+icon: activity
+author: nano
+version: 1
+changelog: "v1: initial harness."
+
+# No auth and no allowed domains: this collector makes no network calls, so the
+# sandbox runs with no outbound access at all. That is also the point — any
+# throughput it fails to reach is nano's, not a vendor's.
+auth_type: none
+requires_credential: none
+
+config_fields:
+  - name: EVENTS_PER_BATCH
+    label: Events per batch
+    field_type: string
+    required: false
+    placeholder: "10000"
+    help: "Events per emit() call. 10000 matches Netskope's page size and the host's ceiling."
+  - name: BATCH_COUNT
+    label: Batch count
+    field_type: string
+    required: false
+    placeholder: "20"
+    help: "How many batches to emit before finishing."
+  - name: EVENT_BYTES
+    label: Bytes per event
+    field_type: string
+    required: false
+    placeholder: "500"
+    help: "Approximate payload size of each synthetic event."
+
+streams:
+  - id: synthetic
+    label: Synthetic events
+    source_type: loadtest_synthetic
+    default: true
+    description: "Fabricated vendor-shaped records. Do not point this at a production deployment."
+
+config:
+  # No schedule that fires on its own — a harness should run when an operator
+  # asks it to, not on a timer against whatever deployment it was left on.
+  poll_schedule: "0 0 1 1 *"
+  max_run_secs: 900
+  max_events_per_emit: 10000
+
+tags:
+  - testing
+  - internal
