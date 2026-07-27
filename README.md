@@ -6,15 +6,31 @@ them in nano — no agent to deploy, no log forwarder to run.
 
 ## Using this catalog
 
-In your nano UI, go to **Settings → Marketplace → Repositories** and add:
+nano syncs this repository by default — open **Marketplace**, find the
+integration, and install it. Then open its **Connections** tab, supply
+credentials, pick the event streams you want, and nano starts pulling.
 
-```
-https://github.com/nano-rs/nano-integrations
+Each enabled stream becomes a log source, so collection shows up in
+**Ingestion → Log Sources** alongside every other feed.
+
+<details>
+<summary>Adding it manually (older installs, or your own fork)</summary>
+
+There is currently no UI for adding a marketplace repository, so this is an API
+call:
+
+```bash
+curl -X POST https://<your-nano>/api/marketplace/repos \
+  -H "X-API-Key: $NANO_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"name":"nano integrations",
+       "url":"https://github.com/nano-rs/nano-integrations",
+       "branch":"main","enrichments_path":"integrations",
+       "auto_sync_enabled":true}'
 ```
 
-Set the content path to `integrations`. The catalog populates a few minutes
-later. Install an integration, supply credentials, pick the event streams you
-want, and nano starts pulling.
+`enrichments_path` is the content path — the field name predates collectors.
+
+</details>
 
 > Integrations are an **enterprise** feature and require outbound network
 > access from the nano API pod. They are not supported in air-gapped
