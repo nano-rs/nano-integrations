@@ -27,8 +27,11 @@ credential_fields:
 
 config_fields:
   - name: TENANT_HOST
+    # `hostname` opts this field into host-policy checking: its value must
+    # satisfy one of the allowed_domain_suffixes below before the collector can
+    # reach it. Fields of any other type are ignored by that policy.
     label: Tenant hostname
-    field_type: string
+    field_type: hostname
     required: true
     placeholder: "acme.goskope.com"
     help: >-

@@ -30,7 +30,7 @@ credential_fields:                # encrypted at rest, injected at call time
 config_fields:                    # NON-secret, operator-supplied config
   - name: TENANT_HOST
     label: Tenant hostname
-    field_type: string
+    field_type: hostname          # opts into the outbound host policy
     required: true
     placeholder: "acme.goskope.com"
     help: "Your tenant hostname"
@@ -95,17 +95,29 @@ only into the sandbox process, never logged, never returned by the API.
 `config_fields` are not secrets: tenant hostnames, region codes, org ids. They
 are readable through the API and appear in logs.
 
-Both render as form inputs. `field_type` is `secret`, `string`, `number`, or
-`boolean`.
+Both render as form inputs. `field_type` is `secret`, `string`, `number`,
+`boolean`, or — for config fields only — `hostname`.
+
+`hostname` is not cosmetic. It opts the field into the outbound host policy
+below: its value must satisfy one of `allowed_domain_suffixes` before nano will
+let the collector reach it. **Every other type is ignored by that policy**, so
+an admin address or a region code is never mistaken for an egress target.
+
+Declare `hostname` on exactly the fields that name a host. Forgetting it fails
+safe — the host is never admitted, and the collector's request is denied by the
+sandbox — but it fails at run time rather than at save time, so it is worth
+getting right.
 
 ### Outbound network
 
 A collector can only reach hosts you declare. Two ways:
 
 - `allowed_domains` — exact hostnames known at authoring time.
-- `allowed_domain_suffixes` — for per-tenant hostnames. nano resolves each
-  `config_fields` value that looks like a hostname and admits it **only if it
-  ends with one of these suffixes**.
+- `allowed_domain_suffixes` — for per-tenant hostnames. nano reads every
+  `config_fields` entry declared as `field_type: hostname` and admits its value
+  **only if it ends with one of these suffixes**. Fields of any other type are
+  not considered, so an admin address or a region code is never mistaken for an
+  egress target.
 
 A suffix must have at least two labels (`.goskope.com` is fine, `.com` is
 rejected). Everything is re-validated against SSRF rules immediately before
