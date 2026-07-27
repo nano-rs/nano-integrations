@@ -1,0 +1,90 @@
+name: Google Workspace
+slug: google_workspace
+category: collector
+description: "Pull login, admin and OAuth-grant audit events from the Google Workspace Reports API"
+icon: shield
+author: nano
+version: 1
+changelog: "v1: initial release — login, admin, token and drive activity streams."
+
+# Service-account JWT with domain-wide delegation. nano builds the assertion,
+# signs it, and exchanges it for a bearer — the collector never touches the key.
+auth_type: service_account_jwt
+auth:
+  token_url: "https://oauth2.googleapis.com/token"
+  private_key_field: PRIVATE_KEY
+  client_email_field: CLIENT_EMAIL
+  subject_field: ADMIN_EMAIL
+  scope: "https://www.googleapis.com/auth/admin.reports.audit.readonly"
+
+requires_credential: required
+credential_fields:
+  - name: PRIVATE_KEY
+    label: Service account private key
+    field_type: secret
+    required: true
+    help: >-
+      The `private_key` value from the service account's JSON key file, including
+      the BEGIN/END PRIVATE KEY lines. Paste it as-is — the escaped \n sequences
+      Google's JSON uses are handled, as are real newlines.
+  - name: CLIENT_EMAIL
+    label: Service account email
+    field_type: secret
+    required: true
+    help: >-
+      The `client_email` from the same JSON file, ending in
+      .iam.gserviceaccount.com.
+
+config_fields:
+  - name: ADMIN_EMAIL
+    label: Admin to impersonate
+    field_type: string
+    required: true
+    placeholder: "admin@yourdomain.com"
+    help: >-
+      A Workspace super-admin whose identity the service account assumes.
+      Domain-wide delegation authenticates AS this user; without it the service
+      account has no domain data to read and the API returns a bare 403 that
+      never mentions delegation. In the Admin console: Security → Access and
+      data control → API controls → Domain-wide delegation → add the service
+      account's client ID with the admin.reports.audit.readonly scope.
+
+# Both hosts are fixed — Google is not per-tenant, so no suffix allowlist is
+# needed. The token endpoint must be listed too: the assertion exchange is an
+# outbound call like any other.
+allowed_domains:
+  - admin.googleapis.com
+  - oauth2.googleapis.com
+
+streams:
+  - id: login
+    label: Login events
+    source_type: gws_login
+    default: true
+    description: "Sign-ins, failures, suspicious-login flags and logout"
+  - id: admin
+    label: Admin console actions
+    source_type: gws_admin
+    default: true
+    description: "Every change an administrator made, and who made it"
+  - id: token
+    label: OAuth token grants
+    source_type: gws_token
+    default: true
+    description: "Third-party apps users authorized, and the scopes they hold"
+  - id: drive
+    label: Drive activity
+    source_type: gws_drive
+    default: false
+    description: "File access and sharing. Very high volume — enable deliberately."
+
+config:
+  poll_schedule: "*/10 * * * *"
+  max_run_secs: 600
+  max_events_per_emit: 1000
+
+tags:
+  - saas
+  - authentication
+  - google
+  - identity

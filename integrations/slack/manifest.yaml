@@ -1,7 +1,7 @@
 name: Slack
 slug: slack
 category: collector
-description: "Pull workspace sign-in records from Slack's access logs — user, IP, device, ISP and geo"
+description: "Pull workspace sign-in records from Slack access logs (needs the `admin` scope — not available on Pro)"
 icon: message-square
 author: nano
 version: 1
@@ -18,10 +18,21 @@ credential_fields:
     field_type: secret
     required: true
     help: >-
-      A Slack *user* token (starts with xoxp-) carrying the `admin` scope. Create
-      an app at api.slack.com/apps, add `admin` under User Token Scopes, install
-      it to your workspace, and copy the User OAuth Token. A bot token (xoxb-)
-      will not work — access logs are only readable with a user token.
+      A Slack *user* token (starts with xoxp-) carrying the `admin` scope.
+      Create an app at api.slack.com/apps, add `admin` under User Token Scopes,
+      install it to your workspace, and copy the User OAuth Token.
+
+      REQUIRES the `admin` scope to be grantable on your workspace. It is NOT
+      offered in the scope picker on Pro — verified on a Pro workspace, where
+      `admin` simply does not appear. The team.accessLogs *method* is documented
+      as Pro/Business+, but the scope that unlocks it is not, so in practice this
+      integration needs Business+ or Enterprise Grid. Check the User Token Scopes
+      picker before configuring: if `admin` is absent, this collector cannot work
+      for you.
+
+      A bot token (xoxb-) will not work — access logs are only readable with a
+      user token. Leave "Advanced token security via token rotation" OFF: it
+      expires tokens every 12 hours and nano has no refresh flow yet.
 
 config_fields:
   - name: TEAM_ID

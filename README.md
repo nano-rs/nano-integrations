@@ -42,12 +42,23 @@ curl -X POST https://<your-nano>/api/marketplace/repos \
 |---|---|---|---|
 | `netskope` | Netskope | API token | alert · page · application · audit · network · connection · incident · infrastructure · endpoint |
 | `slack` | Slack | User token (`admin` scope) | access_logs |
+| `google_workspace` | Google | Service-account JWT | login · admin · token · drive |
 
-`slack` needs only a Pro or Business+ workspace — the Enterprise-Grid-only
-Audit Logs API is a different endpoint. Note that `team.accessLogs` returns
-mutable aggregate records rather than an append-only event stream, so
-re-delivery is guaranteed rather than incidental; see the collector's header
-comment.
+**`slack` needs the `admin` user scope, which is not offered on Pro** — verified
+on a Pro workspace, where it does not appear in the scope picker at all. The
+`team.accessLogs` method is documented as Pro/Business+, but the scope that
+unlocks it is not, so in practice this needs Business+ or Enterprise Grid. Check
+your User Token Scopes picker before configuring.
+
+Note also that `team.accessLogs` returns mutable aggregate records rather than
+an append-only event stream, so re-delivery is guaranteed rather than
+incidental; see the collector's header comment.
+
+`google_workspace` needs a service account with **domain-wide delegation**
+authorized in the Admin console, impersonating a super-admin. Setup is a few
+minutes of clicking but costs nothing, and it is the richest of the three:
+sign-ins with SSO-bypass visibility, every admin console change, and which
+third-party apps hold which OAuth scopes.
 
 ## Layout
 
