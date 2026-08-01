@@ -4,8 +4,13 @@ category: collector
 description: "Pull events and alerts from a Netskope tenant via the REST API v2 Data Export iterator"
 icon: cloud
 author: nano
-version: 3
+version: 4
 changelog: >-
+  v4: each stream now names the parser it needs (parser: netskope) instead of
+  relying on the parser to claim all nine netskope_* source types. Resolution no
+  longer depends on the parsers repo keeping those aliases, so a parser-repo
+  tidy-up can't silently leave streams collecting unparsed. No behaviour change
+  on its own; update before the parsers repo drops the aliases.
   v3: fetched-but-unconfirmed pages are now re-served with operation=resend
   instead of being walked past. Netskope's read position is server-side and
   advances when a page is served, so a page whose emit failed was previously
@@ -63,46 +68,55 @@ streams:
   - id: alert
     label: Alerts
     source_type: netskope_alert
+    parser: netskope
     default: true
     description: "Policy, DLP, malware, anomaly and compromised-credential alerts"
   - id: application
     label: Application events
     source_type: netskope_application
+    parser: netskope
     default: true
     description: "Sanctioned and shadow-IT app activity, including file operations"
   - id: network
     label: Network events
     source_type: netskope_network
+    parser: netskope
     default: true
     description: "Netskope Private Access and firewall-level connection records"
   - id: audit
     label: Audit events
     source_type: netskope_audit
+    parser: netskope
     default: true
     description: "Administrator actions in the Netskope tenant"
   - id: page
     label: Page events
     source_type: netskope_page
+    parser: netskope
     default: false
     description: "Per-page web browsing records. High volume — enable deliberately."
   - id: connection
     label: Connection events
     source_type: netskope_connection
+    parser: netskope
     default: false
     description: "Per-connection records. High volume — enable deliberately."
   - id: incident
     label: Incidents
     source_type: netskope_incident
+    parser: netskope
     default: false
     description: "DLP and threat-protection incident records"
   - id: infrastructure
     label: Infrastructure events
     source_type: netskope_infrastructure
+    parser: netskope
     default: false
     description: "Netskope infrastructure and tunnel health"
   - id: endpoint
     label: Endpoint events
     source_type: netskope_endpoint
+    parser: netskope
     default: false
     description: "Endpoint DLP events from the Netskope client"
 
