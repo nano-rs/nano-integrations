@@ -4,8 +4,14 @@ category: collector
 description: "Pull login, admin and OAuth-grant audit events from the Google Workspace Reports API"
 icon: shield
 author: nano
-version: 1
-changelog: "v1: initial release — login, admin, token and drive activity streams."
+version: 2
+changelog: >-
+  v2: each stream now names the parser it needs (parser: google_workspace)
+  instead of relying on the parser to claim all four gws_* source types.
+  Resolution no longer depends on the parsers repo keeping those aliases, so a
+  parser-repo tidy-up can't silently leave streams collecting unparsed. No
+  behaviour change on its own; update before the parsers repo drops the aliases.
+  v1: initial release — login, admin, token and drive activity streams.
 
 # Service-account JWT with domain-wide delegation. nano builds the assertion,
 # signs it, and exchanges it for a bearer — the collector never touches the key.
@@ -60,21 +66,25 @@ streams:
   - id: login
     label: Login events
     source_type: gws_login
+    parser: google_workspace
     default: true
     description: "Sign-ins, failures, suspicious-login flags and logout"
   - id: admin
     label: Admin console actions
     source_type: gws_admin
+    parser: google_workspace
     default: true
     description: "Every change an administrator made, and who made it"
   - id: token
     label: OAuth token grants
     source_type: gws_token
+    parser: google_workspace
     default: true
     description: "Third-party apps users authorized, and the scopes they hold"
   - id: drive
     label: Drive activity
     source_type: gws_drive
+    parser: google_workspace
     default: false
     description: "File access and sharing. Very high volume — enable deliberately."
 

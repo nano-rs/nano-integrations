@@ -4,8 +4,14 @@ category: collector
 description: "Pull workspace sign-in records from Slack access logs (needs the `admin` scope — not available on Pro)"
 icon: message-square
 author: nano
-version: 1
-changelog: "v1: initial release — team.accessLogs sign-in records."
+version: 2
+changelog: >-
+  v2: the access-log stream now names the parser it needs (parser: slack_access)
+  instead of relying on that parser to claim the slack_access_log source type.
+  Resolution no longer depends on the parsers repo keeping that alias, so a
+  parser-repo tidy-up can't silently leave the stream collecting unparsed. No
+  behaviour change on its own; update before the parsers repo drops the alias.
+  v1: initial release — team.accessLogs sign-in records.
 
 auth_type: bearer
 auth:
@@ -53,6 +59,7 @@ streams:
   - id: access_logs
     label: Sign-in records
     source_type: slack_access_log
+    parser: slack_access
     default: true
     description: "Who signed in, from which IP, device and network"
 
