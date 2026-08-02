@@ -69,27 +69,90 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Where to resume a stream, as an RFC 3339 string.
+ * Where a stream resumes: an instant, plus the records already shipped AT that
+ * instant.
  *
  * `startTime` is inclusive, so resuming at the last event's exact time
- * re-delivers that event. That is the correct trade under at-least-once:
- * nudging forward by a millisecond to avoid it would drop any other event
- * sharing that timestamp.
+ * re-delivers that event. Nudging forward a millisecond would avoid it but drop
+ * any other event sharing the timestamp, so the boundary stays inclusive and
+ * the duplicate is filtered by identity instead.
+ *
+ * `seen` only ever holds identities at exactly `t` — anything strictly older is
+ * already excluded by `startTime`, so it does not grow with the stream.
  */
-function resumeFrom(ctx: CollectorContext, stream: string): string {
-  const cursor = ctx.cursors[stream];
-  if (cursor) return cursor;
+interface Cursor {
+  t: string;
+  seen: string[];
+}
+
+/**
+ * Cap on `seen`, so a burst sharing one millisecond cannot grow the cursor
+ * without bound. Past this the oldest identities are dropped and those records
+ * may be re-delivered once — at-least-once, which the pipeline already assumes.
+ */
+const MAX_SEEN = 500;
+
+/**
+ * Identity of an activity within a stream.
+ *
+ * Google documents (time, uniqueQualifier, applicationName, customerId) as the
+ * composite key. Stream and instant are already fixed by the caller, so
+ * `uniqueQualifier` is what distinguishes two records here. Without one there
+ * is nothing stable to match on, so it is left undeduplicated rather than
+ * guessed at — dropping a record is worse than shipping it twice.
+ */
+function activityKey(activity: Activity): string | null {
+  const q = activity.id?.uniqueQualifier;
+  return q === undefined || q === null || q === "" ? null : String(q);
+}
+
+/**
+ * Parse a stored cursor.
+ *
+ * Accepts the plain RFC 3339 string this collector used to write, so a stream
+ * mid-flight on the old format resumes without re-emitting or skipping: it just
+ * carries an empty `seen` and fills it after the first run.
+ */
+function parseCursor(raw: string | undefined): Cursor | null {
+  if (!raw) return null;
+
+  if (raw.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(raw) as { t?: unknown; seen?: unknown };
+      if (typeof parsed.t === "string" && !Number.isNaN(Date.parse(parsed.t))) {
+        const seen = Array.isArray(parsed.seen)
+          ? parsed.seen.filter((s): s is string => typeof s === "string")
+          : [];
+        return { t: parsed.t, seen };
+      }
+    } catch {
+      // Fall through — a corrupt cursor is handled below rather than throwing
+      // the whole run away.
+    }
+    return null;
+  }
+
+  return Number.isNaN(Date.parse(raw)) ? null : { t: raw, seen: [] };
+}
+
+function resumeFrom(ctx: CollectorContext, stream: string): Cursor {
+  const stored = ctx.cursors[stream];
+  const parsed = parseCursor(stored);
+  if (parsed) return parsed;
+  if (stored) {
+    ctx.log("Ignoring unparseable cursor", { stream, value: stored });
+  }
 
   if (ctx.backfillFrom) {
-    const parsed = Date.parse(ctx.backfillFrom);
-    if (!Number.isNaN(parsed)) return new Date(parsed).toISOString();
+    const from = Date.parse(ctx.backfillFrom);
+    if (!Number.isNaN(from)) return { t: new Date(from).toISOString(), seen: [] };
     ctx.log("Ignoring unparseable backfillFrom", { value: ctx.backfillFrom });
   }
 
   // Default to 24h back rather than the retention limit: enough to prove the
   // integration works on first run without pulling six months of Drive
   // activity into a tenant that only wanted to try it.
-  return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  return { t: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), seen: [] };
 }
 
 /**
@@ -192,14 +255,21 @@ async function fetchPage(
  * older event can appear on a page ahead of a newer one.
  */
 async function collectStream(ctx: CollectorContext, stream: string): Promise<number> {
-  const startTime = resumeFrom(ctx, stream);
-  ctx.log("Collecting activities", { stream, startTime });
+  const cursor = resumeFrom(ctx, stream);
+  const startTime = cursor.t;
+  const startMs = Date.parse(startTime);
+  const alreadyShipped = new Set(cursor.seen);
+  ctx.log("Collecting activities", { stream, startTime, seen: cursor.seen.length });
 
   let pageToken: string | undefined;
   let attempt = 0;
   let pages = 0;
   let collected = 0;
-  let newest = Date.parse(startTime);
+  let skipped = 0;
+  let newest = startMs;
+  // Identities at exactly `newest`. Rebuilt whenever a later instant wins, so
+  // it only ever describes the boundary.
+  let atNewest: string[] = [...cursor.seen];
 
   while (!ctx.shouldStop()) {
     if (pages >= MAX_PAGES_PER_STREAM) {
@@ -218,13 +288,37 @@ async function collectStream(ctx: CollectorContext, stream: string): Promise<num
     pages += 1;
 
     const items = body.items ?? [];
-    if (items.length > 0) {
-      await ctx.emit(stream, items);
-      collected += items.length;
 
-      for (const item of items) {
-        const t = activityTime(item);
-        if (t !== null && t > newest) newest = t;
+    // `startTime` is inclusive, so the records that sat on the boundary last
+    // run come back every run. Drop the ones already shipped — by identity, not
+    // by time, so a NEW record sharing that instant still gets through.
+    const fresh = items.filter((item) => {
+      const t = activityTime(item);
+      if (t === null || t !== startMs) return true;
+      const key = activityKey(item);
+      if (key === null || !alreadyShipped.has(key)) return true;
+      skipped += 1;
+      return false;
+    });
+
+    if (fresh.length > 0) {
+      await ctx.emit(stream, fresh);
+      collected += fresh.length;
+    }
+
+    // Track the boundary across everything SEEN, not just what was emitted:
+    // a filtered duplicate still sits on the watermark and must stay in `seen`,
+    // or the next run ships it again.
+    for (const item of items) {
+      const t = activityTime(item);
+      if (t === null) continue;
+      if (t > newest) {
+        newest = t;
+        atNewest = [];
+      }
+      if (t === newest) {
+        const key = activityKey(item);
+        if (key !== null && !atNewest.includes(key)) atNewest.push(key);
       }
     }
 
@@ -234,14 +328,38 @@ async function collectStream(ctx: CollectorContext, stream: string): Promise<num
     await sleep(PAGE_INTERVAL_MS);
   }
 
+  if (skipped > 0) {
+    ctx.log("Filtered records already shipped at the watermark", { stream, skipped });
+  }
+
+  if (atNewest.length > MAX_SEEN) {
+    // Every identity here shares one instant, so there is no meaningful order
+    // among them and no subset is a better bet than another — the dropped ones
+    // simply re-deliver once each. Bounding the cursor matters more than which
+    // ones survive.
+    ctx.log("Boundary identity set capped; some records may re-deliver once", {
+      stream,
+      at: new Date(newest).toISOString(),
+      dropped: atNewest.length - MAX_SEEN,
+    });
+    atNewest = atNewest.slice(-MAX_SEEN);
+  }
+
   // Commit once, after every page has been acked. Committing per page would
   // advance the window past events on pages not yet shipped.
   //
   // The watermark is the newest EVENT time, never wall-clock: Workspace audit
   // events surface minutes to hours late, so moving to "now" would skip
   // everything still in flight, silently and permanently.
-  if (newest > Date.parse(startTime)) {
-    await ctx.checkpoint(stream, new Date(newest).toISOString());
+  //
+  // Committed even when the instant did NOT move, because `seen` may have
+  // grown — that is how a stream with no new events stops re-shipping its
+  // newest record on every poll.
+  const advanced = newest > startMs;
+  const learned = atNewest.length !== cursor.seen.length;
+  if (advanced || learned) {
+    const next: Cursor = { t: new Date(newest).toISOString(), seen: atNewest };
+    await ctx.checkpoint(stream, JSON.stringify(next));
   }
 
   return collected;
