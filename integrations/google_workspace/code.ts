@@ -80,9 +80,19 @@ function sleep(ms: number): Promise<void> {
  * `seen` only ever holds identities at exactly `t` — anything strictly older is
  * already excluded by `startTime`, so it does not grow with the stream.
  */
-interface Cursor {
+interface CursorBoundary {
   t: string;
   seen: string[];
+}
+
+interface Cursor extends CursorBoundary {
+  // Keep the logical watermark pinned while a wide newest-first window is
+  // worked downward across runs. `newest` becomes the normal cursor only after
+  // the lower part of the window drains.
+  continuation?: {
+    endTime: string;
+    newest: CursorBoundary;
+  };
 }
 
 /**
@@ -118,12 +128,39 @@ function parseCursor(raw: string | undefined): Cursor | null {
 
   if (raw.startsWith("{")) {
     try {
-      const parsed = JSON.parse(raw) as { t?: unknown; seen?: unknown };
+      const parsed = JSON.parse(raw) as {
+        t?: unknown;
+        seen?: unknown;
+        continuation?: unknown;
+      };
       if (typeof parsed.t === "string" && !Number.isNaN(Date.parse(parsed.t))) {
         const seen = Array.isArray(parsed.seen)
           ? parsed.seen.filter((s): s is string => typeof s === "string")
           : [];
-        return { t: parsed.t, seen };
+        const cursor: Cursor = { t: parsed.t, seen };
+        const continuation = parsed.continuation as {
+          endTime?: unknown;
+          newest?: { t?: unknown; seen?: unknown };
+        } | null;
+        if (
+          continuation &&
+          typeof continuation.endTime === "string" &&
+          Date.parse(continuation.endTime) > Date.parse(parsed.t) &&
+          continuation.newest &&
+          typeof continuation.newest.t === "string" &&
+          Date.parse(continuation.newest.t) >= Date.parse(parsed.t)
+        ) {
+          cursor.continuation = {
+            endTime: continuation.endTime,
+            newest: {
+              t: continuation.newest.t,
+              seen: Array.isArray(continuation.newest.seen)
+                ? continuation.newest.seen.filter((s): s is string => typeof s === "string")
+                : [],
+            },
+          };
+        }
+        return cursor;
       }
     } catch {
       // Fall through — a corrupt cursor is handled below rather than throwing
@@ -199,6 +236,7 @@ async function fetchPage(
   ctx: CollectorContext,
   stream: string,
   startTime: string,
+  endTime: string | undefined,
   pageToken: string | undefined,
   attempt: number,
 ): Promise<ActivitiesResponse | null> {
@@ -206,6 +244,7 @@ async function fetchPage(
     startTime,
     maxResults: String(PAGE_SIZE),
   });
+  if (endTime) params.set("endTime", endTime);
   if (pageToken) params.set("pageToken", pageToken);
 
   // The Authorization header is injected by the sandbox after it exchanges the
@@ -250,34 +289,48 @@ async function fetchPage(
 /**
  * Drain one application's activities from `startTime` forward.
  *
- * Every page in the window is walked before the cursor moves. Stopping early on
- * seeing an old event would be wrong here — ordering is not guaranteed, so an
- * older event can appear on a page ahead of a newer one.
+ * The logical watermark moves only after every page in the window is walked.
+ * Stopping early on seeing an old event would be wrong here — ordering is not
+ * guaranteed, so an older event can appear on a page ahead of a newer one.
  */
-async function collectStream(ctx: CollectorContext, stream: string): Promise<number> {
+async function collectStream(
+  ctx: CollectorContext,
+  stream: string,
+): Promise<{ collected: number; drained: boolean }> {
   const cursor = resumeFrom(ctx, stream);
   const startTime = cursor.t;
   const startMs = Date.parse(startTime);
+  const endTime = cursor.continuation?.endTime;
   const alreadyShipped = new Set(cursor.seen);
-  ctx.log("Collecting activities", { stream, startTime, seen: cursor.seen.length });
+  ctx.log("Collecting activities", { stream, startTime, endTime, seen: cursor.seen.length });
 
   let pageToken: string | undefined;
   let attempt = 0;
   let pages = 0;
   let collected = 0;
   let skipped = 0;
-  let newest = startMs;
+  let truncatedBy: "page ceiling" | "run budget" | null = null;
+  let oldest = Number.POSITIVE_INFINITY;
+  let newest = cursor.continuation
+    ? Date.parse(cursor.continuation.newest.t)
+    : startMs;
   // Identities at exactly `newest`. Rebuilt whenever a later instant wins, so
   // it only ever describes the boundary.
-  let atNewest: string[] = [...cursor.seen];
+  let atNewest: string[] = cursor.continuation
+    ? [...cursor.continuation.newest.seen]
+    : [...cursor.seen];
 
-  while (!ctx.shouldStop()) {
+  while (true) {
+    if (ctx.shouldStop()) {
+      truncatedBy = "run budget";
+      break;
+    }
     if (pages >= MAX_PAGES_PER_STREAM) {
-      ctx.log("Page ceiling reached; the rest follows next run", { stream, pages });
+      truncatedBy = "page ceiling";
       break;
     }
 
-    const body = await fetchPage(ctx, stream, startTime, pageToken, attempt);
+    const body = await fetchPage(ctx, stream, startTime, endTime, pageToken, attempt);
     if (body === null) {
       // Backed off inside fetchPage; the request never landed, so retry the
       // same page token.
@@ -312,6 +365,7 @@ async function collectStream(ctx: CollectorContext, stream: string): Promise<num
     for (const item of items) {
       const t = activityTime(item);
       if (t === null) continue;
+      if (t < oldest) oldest = t;
       if (t > newest) {
         newest = t;
         atNewest = [];
@@ -345,8 +399,47 @@ async function collectStream(ctx: CollectorContext, stream: string): Promise<num
     atNewest = atNewest.slice(-MAX_SEEN);
   }
 
-  // Commit once, after every page has been acked. Committing per page would
-  // advance the window past events on pages not yet shipped.
+  if (truncatedBy !== null) {
+    if (Number.isFinite(oldest)) {
+      // The API exposes no ordering control, but its pages arrive newest-first;
+      // narrowing at the oldest instant reached is what lets a static backlog
+      // make progress. The bound deliberately overlaps because a page can split
+      // one timestamp, and replay is safer than dropping the remaining records.
+      const currentEndMs = endTime ? Date.parse(endTime) : Date.now();
+      const continuationEndMs = Math.min(oldest + 1, currentEndMs);
+      if (continuationEndMs > startMs) {
+        const next: Cursor = {
+          t: cursor.t,
+          seen: cursor.seen,
+          continuation: {
+            endTime: new Date(continuationEndMs).toISOString(),
+            newest: { t: new Date(newest).toISOString(), seen: atNewest },
+          },
+        };
+        await ctx.checkpoint(stream, JSON.stringify(next));
+        ctx.log("Walk truncated; older events will resume from an overlapping boundary next run", {
+          stream,
+          pages,
+          reason: truncatedBy,
+          endTime: next.continuation?.endTime,
+        });
+        return { collected, drained: false };
+      }
+    }
+
+    // Without a valid event time there is no safe way to narrow the window.
+    // Replaying is noisy, but it preserves the collector's at-least-once side
+    // of the trade-off instead of guessing past records that may still be owed.
+    ctx.log("Walk truncated; cursor unchanged because no safe continuation boundary was observed", {
+      stream,
+      pages,
+      reason: truncatedBy,
+    });
+    return { collected, drained: false };
+  }
+
+  // Commit the logical watermark once, after every page has been acked.
+  // Committing it per page would advance the window past events not yet shipped.
   //
   // The watermark is the newest EVENT time, never wall-clock: Workspace audit
   // events surface minutes to hours late, so moving to "now" would skip
@@ -357,12 +450,12 @@ async function collectStream(ctx: CollectorContext, stream: string): Promise<num
   // newest record on every poll.
   const advanced = newest > startMs;
   const learned = atNewest.length !== cursor.seen.length;
-  if (advanced || learned) {
+  if (cursor.continuation || advanced || learned) {
     const next: Cursor = { t: new Date(newest).toISOString(), seen: atNewest };
     await ctx.checkpoint(stream, JSON.stringify(next));
   }
 
-  return collected;
+  return { collected, drained: true };
 }
 
 async function collect(ctx: CollectorContext): Promise<void> {
@@ -376,9 +469,12 @@ async function collect(ctx: CollectorContext): Promise<void> {
     }
 
     try {
-      const count = await collectStream(ctx, stream);
-      total += count;
-      ctx.log("Stream drained", { stream, events: count });
+      const result = await collectStream(ctx, stream);
+      total += result.collected;
+      ctx.log(result.drained ? "Stream drained" : "Stream paused", {
+        stream,
+        events: result.collected,
+      });
     } catch (error) {
       // One application's missing scope should not take down the others —
       // delegation is commonly authorized for some scopes and not others.

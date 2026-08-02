@@ -4,8 +4,18 @@ category: collector
 description: "Pull login, admin and OAuth-grant audit events from the Google Workspace Reports API"
 icon: shield
 author: nano
-version: 3
+version: 4
 changelog: >-
+  v4: keep older audit events reachable when a walk hits the 500-page ceiling
+  or the run budget. Results arrive newest-first, so committing the newest event
+  from an incomplete walk permanently skipped every page still below it. A
+  truncated walk now pins the existing inclusive lower boundary and checkpoints
+  an overlapping upper-bound continuation; consecutive runs work down through
+  the backlog, then collapse back to the normal newest-event cursor once it is
+  drained. The overlap can re-deliver acknowledged events, preserving
+  at-least-once delivery rather than risking a same-timestamp gap. Existing v3
+  JSON cursors and v1/v2 timestamp cursors remain compatible; the continuation
+  fields only appear temporarily while a backlog is being drained.
   v3: stop re-delivering the event on the watermark. The Reports API startTime
   is inclusive, so the newest event came back every run, and the guard that
   advanced the cursor ("newest > startTime") was then false — so it never
