@@ -4,8 +4,14 @@ category: collector
 description: "Pull workspace sign-in records from Slack access logs (needs the `admin` scope — not available on Pro)"
 icon: message-square
 author: nano
-version: 2
+version: 3
 changelog: >-
+  v3: report a stream failure in the shape nano can attribute. This collector
+  threw straight out of collect, so the host had no structured log to recover
+  the stream name from and the per-stream last_error stayed NULL — a broken
+  connection looked identical to a quiet one in the UI. Failures now log
+  "Stream failed" with the stream and error before rethrowing; the run still
+  fails. Observability only, no collection behaviour changes.
   v2: the access-log stream now names the parser it needs (parser: slack_access)
   instead of relying on that parser to claim the slack_access_log source type.
   Resolution no longer depends on the parsers repo keeping that alias, so a
