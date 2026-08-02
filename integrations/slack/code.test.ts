@@ -117,3 +117,57 @@ Deno.test("slack DOES re-emit a record whose date_last moved", async () => {
     api.restore();
   }
 });
+
+/**
+ * NAN-2280: slack was the one collector that never attributed a failure to its
+ * stream — it threw straight out of `collect`, so the host had no structured
+ * log to recover the name from and the per-stream `last_error` stayed NULL.
+ *
+ * Asserts the runtime behaviour, not just that the string is present in the
+ * file: the log must carry the stream name AND the failure must still propagate.
+ * Swallowing it would turn a broken stream into a silently successful run,
+ * which is worse than the bug being fixed.
+ */
+Deno.test("a slack failure names its stream and still fails the run", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (): Promise<Response> =>
+    Promise.resolve(
+      new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+  const logged: Array<{ msg: string; fields?: Record<string, unknown> }> = [];
+  const ctx = {
+    cursors: {},
+    credentials: { TOKEN: "xoxp-test" },
+    config: {},
+    streams: ["access_logs"],
+    emit: () => Promise.resolve(),
+    checkpoint: () => Promise.resolve(),
+    shouldStop: () => false,
+    log: (msg: string, fields?: Record<string, unknown>) => logged.push({ msg, fields }),
+  };
+
+  try {
+    let threw = false;
+    try {
+      await collect(ctx as never);
+    } catch {
+      threw = true;
+    }
+    assertEquals(threw, true, "the failure must still propagate");
+
+    const failure = logged.find((l) => l.msg === "Stream failed");
+    assertEquals(failure !== undefined, true, "must log the host-parsed message");
+    assertEquals(failure?.fields?.stream, "access_logs", "must name the stream");
+    assertEquals(
+      typeof failure?.fields?.error === "string" && (failure.fields.error as string).length > 0,
+      true,
+      "must carry a non-empty error",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
