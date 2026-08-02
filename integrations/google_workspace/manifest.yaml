@@ -4,8 +4,18 @@ category: collector
 description: "Pull login, admin and OAuth-grant audit events from the Google Workspace Reports API"
 icon: shield
 author: nano
-version: 2
+version: 3
 changelog: >-
+  v3: stop re-delivering the event on the watermark. The Reports API startTime
+  is inclusive, so the newest event came back every run, and the guard that
+  advanced the cursor ("newest > startTime") was then false — so it never
+  advanced and the same record shipped on every poll indefinitely. Quiet streams
+  amplified hardest: admin reached 547 rows for 6 real events in five days. The
+  cursor now records which identities sat on the boundary instant and filters
+  exactly those, so the boundary stays inclusive (no event sharing that
+  timestamp is dropped) without the repeat. Cursors written by v1/v2 are read
+  as-is and upgrade after one run. Duplicates ALREADY ingested are not removed
+  by this — dedupe downstream if the counts matter.
   v2: each stream now names the parser it needs (parser: google_workspace)
   instead of relying on the parser to claim all four gws_* source types.
   Resolution no longer depends on the parsers repo keeping those aliases, so a

@@ -12,8 +12,13 @@
 //   * There is no "since" parameter. Incremental collection means walking
 //     newest-first and stopping once records fall below the last watermark.
 //   * Re-delivery is guaranteed, not incidental: a session still being added to
-//     is re-emitted every run until it goes quiet. The cursor is a high-water
-//     mark on `date_last`, so each run re-emits the boundary record at minimum.
+//     is re-emitted every run until it goes quiet, because its `date_last`
+//     keeps moving past the watermark. A record that has NOT changed is not
+//     re-emitted — the walk breaks on `date_last <= watermark`, excluding the
+//     boundary. Keep that comparison inclusive-of-the-watermark: the Google
+//     Workspace collector had the mirror-image bug (an inclusive API boundary
+//     with a strict guard) and re-shipped one record every poll for five days
+//     (NAN-2272). code.test.ts pins both halves of this.
 //   * The records are mutable, so the newest ones are the least stable. That is
 //     fine for a SIEM — later copies supersede earlier ones on the same
 //     (user, ip, user_agent) key, which the parser preserves so a query can
