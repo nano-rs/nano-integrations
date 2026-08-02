@@ -202,3 +202,155 @@ Deno.test("a corrupt cursor does not throw the run away", async () => {
     api.restore();
   }
 });
+
+/**
+ * A newest-first Reports API with real page tokens and inclusive time bounds.
+ * Events are generated on demand so the ceiling test does not retain a second
+ * 500,001-item copy of its backlog.
+ */
+function paginatedStubApi(total: number, oldestMs: number) {
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+
+  globalThis.fetch = (input: string | URL | Request): Promise<Response> => {
+    const url = new URL(String(input));
+    const startMs = Date.parse(url.searchParams.get("startTime") ?? "");
+    const end = url.searchParams.get("endTime");
+    const endMs = end === null ? Number.POSITIVE_INFINITY : Date.parse(end);
+    const pageSize = Number(url.searchParams.get("maxResults") ?? "1000");
+    const offset = Number(url.searchParams.get("pageToken") ?? "0");
+
+    // One event per millisecond makes the time-bound continuation observable:
+    // the next run must retain the inclusive lower bound while narrowing the
+    // upper bound below the already walked newest pages.
+    const first = Math.max(0, Math.ceil(startMs - oldestMs));
+    const last = Math.min(total - 1, Math.floor(endMs - oldestMs));
+    const available = Math.max(0, last - first + 1);
+    const count = Math.min(pageSize, Math.max(0, available - offset));
+    const items: Activity[] = [];
+    for (let i = 0; i < count; i++) {
+      const index = last - offset - i;
+      items.push(activity(new Date(oldestMs + index).toISOString(), `q-${index}`));
+    }
+
+    const body: { items: Activity[]; nextPageToken?: string } = { items };
+    if (offset + count < available) body.nextPageToken = String(offset + count);
+    return Promise.resolve(
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  };
+
+  // Production pacing is important, but waiting 499 * 250ms would only make
+  // this deterministic pagination test slow.
+  globalThis.setTimeout = ((handler: () => void) => {
+    handler();
+    return 0;
+  }) as typeof setTimeout;
+
+  return {
+    restore: () => {
+      globalThis.fetch = originalFetch;
+      globalThis.setTimeout = originalSetTimeout;
+    },
+  };
+}
+
+function paginatedCtx(
+  cursors: Record<string, string | undefined>,
+  delivered: Set<string>,
+  shouldStop: () => boolean = () => false,
+) {
+  const logs: string[] = [];
+  let emitted = 0;
+  return {
+    logs,
+    get emitted() {
+      return emitted;
+    },
+    ctx: {
+      cursors,
+      credentials: {},
+      config: {},
+      streams: ["admin"],
+      emit: (_s: string, events: unknown[]) => {
+        for (const event of events as Activity[]) {
+          emitted += 1;
+          delivered.add(event.id.uniqueQualifier ?? "");
+        }
+        return Promise.resolve();
+      },
+      checkpoint: (_s: string, cursor: string) => {
+        cursors["admin"] = cursor;
+        return Promise.resolve();
+      },
+      shouldStop,
+      log: (message: string) => logs.push(message),
+    },
+  };
+}
+
+Deno.test("a backlog beyond the page ceiling drains across consecutive runs", async () => {
+  const total = 500_001;
+  const oldestMs = Date.now() - 3 * 60 * 60 * 1000;
+  const api = paginatedStubApi(total, oldestMs);
+  try {
+    const initial = new Date(oldestMs - 1).toISOString();
+    const cursors: Record<string, string | undefined> = {
+      admin: JSON.stringify({ t: initial, seen: [] }),
+    };
+    const delivered = new Set<string>();
+
+    const run1 = paginatedCtx(cursors, delivered);
+    await collect(run1.ctx as never);
+    assertEquals(delivered.size, 500_000);
+    assertEquals(JSON.parse(cursors.admin as string).t, initial, "the lower boundary stays pinned");
+    assertEquals(
+      run1.logs.includes("Walk truncated; older events will resume from an overlapping boundary next run"),
+      true,
+    );
+    assertEquals(run1.logs.includes("Stream paused"), true);
+
+    const run2 = paginatedCtx(cursors, delivered);
+    await collect(run2.ctx as never);
+    assertEquals(delivered.size, total, "the oldest page must not be stranded behind the ceiling");
+    assertEquals(JSON.parse(cursors.admin as string).continuation, undefined, "the final cursor is v3-compatible");
+  } finally {
+    api.restore();
+  }
+});
+
+Deno.test("a shouldStop truncation drains its backlog across consecutive runs", async () => {
+  const total = 2_001;
+  const oldestMs = Date.now() - 2 * 60 * 60 * 1000;
+  const api = paginatedStubApi(total, oldestMs);
+  try {
+    const initial = new Date(oldestMs - 1).toISOString();
+    const cursors: Record<string, string | undefined> = {
+      admin: JSON.stringify({ t: initial, seen: [] }),
+    };
+    const delivered = new Set<string>();
+    let stopChecks = 0;
+
+    // collect checks once before entering the stream and once before each page.
+    // The third check stops after page one has been emitted and acknowledged.
+    const run1 = paginatedCtx(cursors, delivered, () => stopChecks++ >= 2);
+    await collect(run1.ctx as never);
+    assertEquals(delivered.size, 1_000);
+    assertEquals(JSON.parse(cursors.admin as string).t, initial, "the lower boundary stays pinned");
+    assertEquals(
+      run1.logs.includes("Walk truncated; older events will resume from an overlapping boundary next run"),
+      true,
+    );
+    assertEquals(run1.logs.includes("Stream paused"), true);
+
+    const run2 = paginatedCtx(cursors, delivered);
+    await collect(run2.ctx as never);
+    assertEquals(delivered.size, total, "stopping mid-walk must not strand older pages");
+    assertEquals(JSON.parse(cursors.admin as string).continuation, undefined, "the final cursor is v3-compatible");
+  } finally {
+    api.restore();
+  }
+});
