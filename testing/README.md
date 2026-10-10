@@ -3,7 +3,58 @@
 Not part of the catalog. Repo sync walks the `integrations/` content path only,
 so nothing here is ever installed by a nano deployment browsing this repo.
 
-## `throughput-collector`
+## `shadow`
+
+The NAN-3490 shadow run: proof that each `connector.yaml` replaces its
+`code.ts`. For every integration it starts the same vendor mock twice, runs the
+unmodified `code.ts` under a port of nano's Deno auth wrapper
+(`shadow/driver.ts`) against one and `nano-connector shadow` against the
+other, and checks that:
+
+- both ship the same events per stream (a multiset diff; `_nano_ingest_id` is
+  the engine's stamp and is ignored);
+- a second connector run from the first run's checkpoints ships nothing;
+- every connector event carries `_nano_ingest_id`;
+- the stream's OCSF parser gives every event a `metadata.uid` that is the same
+  on a second parse and not shared with another event (`nano-connector
+  check-uids`), since the lake dedupes on it and drops a later row with the
+  same uid.
+
+A contract test needs no binary and always runs: every manifest names its
+`connector.yaml`, declares a `runtime`, and declares every credential, config
+field and stream `source_type` the spec uses.
+
+```sh
+# contract only
+deno test --allow-read --allow-env testing/shadow/shadow.test.ts
+# full shadow run
+NANO_CONNECTOR_BIN=/path/to/nano-connector NANO_PARSERS_DIR=/path/to/parsers \
+  deno test --allow-read --allow-write --allow-net=127.0.0.1 --allow-run --allow-env \
+  testing/shadow/shadow.test.ts
+```
+
+Without `NANO_CONNECTOR_BIN` the shadow tests are skipped, unless
+`NANO_SHADOW_REQUIRED=1` (CI), which turns a missing binary into a failure.
+`.github/workflows/shadow.yml` builds `nano-connector` from nanosiem and
+checks out the parsers repo's `ocsf-1.9` branch.
+
+## `netskope-mock`
+
+A mock of Netskope's iterator API (`/api/v2/events/dataexport/...`) with its
+server-side position: `operation=next` advances it, `resend` re-serves the last
+page, and the first call opens the iterator at an epoch. It can drop the
+response after serving a page (`failAfterServe`) to prove a lost page is
+resent, not skipped. Runs standalone: `deno run --allow-net --allow-env
+testing/netskope-mock/mock.ts`.
+
+## `throughput-collector` (retired at the connector cutover)
+
+Nothing uses this harness except this README. It measures the Deno framed
+stdout protocol, which goes away with the Deno runtime, so it is retired at
+the cutover rather than ported. To load-test the connector engine, run
+`nano-connector shadow` against a high-volume mock (for example
+`netskope-mock` with a large backlog) and read `events` and the wall-clock
+time.
 
 Measures the **nano-side** ceiling of the collector path — Deno sandbox →
 framed stdout protocol → host ingest → Vector — with the vendor removed from
