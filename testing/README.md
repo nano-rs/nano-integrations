@@ -58,3 +58,17 @@ Vendor latency, rate-limit backoff, or cursor round-trips — all of which
 dominate a real collector's wall-clock. A real integration is almost always
 waiting on the vendor, not on nano. This harness deliberately removes that wait
 so the remaining ceiling is visible.
+
+## `ocsf-parsers`
+
+A check, not a harness (NAN-3483). `ocsf-parsers.json` snapshots the OCSF parser
+set (name and `match_values`) from the parsers repo's `ocsf-1.9` branch, and
+`manifests.test.ts` fails when a collector stream names a parser outside that
+set, names one that does not claim its `source_type`, or declares none and no
+OCSF parser claims its `source_type`.
+
+```sh
+deno test --allow-read testing/ocsf-parsers/manifests.test.ts
+# refresh the snapshot from a parsers checkout on origin/ocsf-1.9
+deno run --allow-read --allow-write --allow-run=git testing/ocsf-parsers/refresh.ts ../parsers
+```

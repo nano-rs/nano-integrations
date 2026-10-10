@@ -1,0 +1,422 @@
+{
+  "source": {
+    "repo": "nano-rs/parsers",
+    "branch": "ocsf-1.9",
+    "path": "parsers-ocsf",
+    "commit": "287f0c1"
+  },
+  "parsers": [
+    {
+      "name": "apache_ocsf",
+      "match_values": [
+        "apache_access"
+      ]
+    },
+    {
+      "name": "auth0_ocsf",
+      "match_values": [
+        "auth0"
+      ]
+    },
+    {
+      "name": "aws_alb_ocsf",
+      "match_values": [
+        "aws_alb"
+      ]
+    },
+    {
+      "name": "aws_cloudtrail_ocsf",
+      "match_values": [
+        "aws_cloudtrail"
+      ]
+    },
+    {
+      "name": "aws_guardduty_ocsf",
+      "match_values": [
+        "aws_guardduty"
+      ]
+    },
+    {
+      "name": "aws_s3_access_ocsf",
+      "match_values": [
+        "aws_s3_access"
+      ]
+    },
+    {
+      "name": "aws_vpc_flow_ocsf",
+      "match_values": [
+        "aws_vpc_flow"
+      ]
+    },
+    {
+      "name": "aws_waf_ocsf",
+      "match_values": [
+        "aws_waf"
+      ]
+    },
+    {
+      "name": "azure_activity_ocsf",
+      "match_values": [
+        "azure_activity"
+      ]
+    },
+    {
+      "name": "azure_firewall_ocsf",
+      "match_values": [
+        "azure_firewall"
+      ]
+    },
+    {
+      "name": "azure_signin_ocsf",
+      "match_values": [
+        "azure_signin"
+      ]
+    },
+    {
+      "name": "broadcom_proxy_ocsf",
+      "match_values": [
+        "broadcom_proxy"
+      ]
+    },
+    {
+      "name": "carbon_black_ocsf",
+      "match_values": [
+        "carbon_black"
+      ]
+    },
+    {
+      "name": "checkpoint_ocsf",
+      "match_values": [
+        "checkpoint"
+      ]
+    },
+    {
+      "name": "cisco_asa_ocsf",
+      "match_values": [
+        "cisco_asa"
+      ]
+    },
+    {
+      "name": "cisco_umbrella_ocsf",
+      "match_values": [
+        "cisco_umbrella"
+      ]
+    },
+    {
+      "name": "cloudflare_ocsf",
+      "match_values": [
+        "cloudflare"
+      ]
+    },
+    {
+      "name": "conduit_proxy_ocsf",
+      "match_values": [
+        "conduit_proxy"
+      ]
+    },
+    {
+      "name": "crowdstrike_falcon_ocsf",
+      "match_values": [
+        "crowdstrike_falcon"
+      ]
+    },
+    {
+      "name": "cyberark_ocsf",
+      "match_values": [
+        "cyberark"
+      ]
+    },
+    {
+      "name": "defender_edr_ocsf",
+      "match_values": [
+        "defender_edr"
+      ]
+    },
+    {
+      "name": "duo_ocsf",
+      "match_values": [
+        "duo"
+      ]
+    },
+    {
+      "name": "f5_waf_ocsf",
+      "match_values": [
+        "f5_waf"
+      ]
+    },
+    {
+      "name": "fortinet_ocsf",
+      "match_values": [
+        "fortinet"
+      ]
+    },
+    {
+      "name": "gcp_audit_ocsf",
+      "match_values": [
+        "gcp_audit"
+      ]
+    },
+    {
+      "name": "github_audit_ocsf",
+      "match_values": [
+        "github_audit"
+      ]
+    },
+    {
+      "name": "google_workspace_ocsf",
+      "match_values": [
+        "google_workspace",
+        "gws_admin",
+        "gws_drive",
+        "gws_login",
+        "gws_token"
+      ]
+    },
+    {
+      "name": "infoblox_dhcp_ocsf",
+      "match_values": [
+        "infoblox_dhcp"
+      ]
+    },
+    {
+      "name": "json_generic_ocsf",
+      "match_values": [
+        "json_generic"
+      ]
+    },
+    {
+      "name": "juniper_srx_ocsf",
+      "match_values": [
+        "juniper_srx"
+      ]
+    },
+    {
+      "name": "kubernetes_audit_ocsf",
+      "match_values": [
+        "kubernetes_audit"
+      ]
+    },
+    {
+      "name": "limacharlie_ocsf",
+      "match_values": [
+        "limacharlie"
+      ]
+    },
+    {
+      "name": "linux_auditd_ocsf",
+      "match_values": [
+        "linux_auditd"
+      ]
+    },
+    {
+      "name": "linux_journald_ocsf",
+      "match_values": [
+        "linux_journald"
+      ]
+    },
+    {
+      "name": "meraki_ocsf",
+      "match_values": [
+        "meraki"
+      ]
+    },
+    {
+      "name": "microsoft_365_ocsf",
+      "match_values": [
+        "microsoft_365"
+      ]
+    },
+    {
+      "name": "mimecast_ocsf",
+      "match_values": [
+        "mimecast"
+      ]
+    },
+    {
+      "name": "moat_edr_ocsf",
+      "match_values": [
+        "moat",
+        "moat_edr"
+      ]
+    },
+    {
+      "name": "nano_operational_ocsf",
+      "match_values": [
+        "nano_operational"
+      ]
+    },
+    {
+      "name": "nano-platform-api_ocsf",
+      "match_values": [
+        "nano-platform-api"
+      ]
+    },
+    {
+      "name": "netskope_ocsf",
+      "match_values": [
+        "netskope",
+        "netskope_alert",
+        "netskope_application",
+        "netskope_audit",
+        "netskope_connection",
+        "netskope_endpoint",
+        "netskope_events",
+        "netskope_incident",
+        "netskope_infrastructure",
+        "netskope_network",
+        "netskope_page"
+      ]
+    },
+    {
+      "name": "nginx_ocsf",
+      "match_values": [
+        "nginx"
+      ]
+    },
+    {
+      "name": "okta_ocsf",
+      "match_values": [
+        "okta"
+      ]
+    },
+    {
+      "name": "onepassword_ocsf",
+      "match_values": [
+        "onepassword"
+      ]
+    },
+    {
+      "name": "opentelemetry_logs_ocsf",
+      "match_values": [
+        "otlp_log"
+      ]
+    },
+    {
+      "name": "palo_alto_ocsf",
+      "match_values": [
+        "palo_alto"
+      ]
+    },
+    {
+      "name": "proofpoint_ocsf",
+      "match_values": [
+        "proofpoint"
+      ]
+    },
+    {
+      "name": "qualys_ocsf",
+      "match_values": [
+        "qualys"
+      ]
+    },
+    {
+      "name": "rapid7_insightvm_ocsf",
+      "match_values": [
+        "rapid7_insightvm"
+      ]
+    },
+    {
+      "name": "routeros_ocsf",
+      "match_values": [
+        "routeros"
+      ]
+    },
+    {
+      "name": "sentinelone_ocsf",
+      "match_values": [
+        "sentinelone"
+      ]
+    },
+    {
+      "name": "slack_access_ocsf",
+      "match_values": [
+        "slack_access",
+        "slack_access_log"
+      ]
+    },
+    {
+      "name": "slack_audit_ocsf",
+      "match_values": [
+        "slack_audit"
+      ]
+    },
+    {
+      "name": "sonicwall_ocsf",
+      "match_values": [
+        "sonicwall"
+      ]
+    },
+    {
+      "name": "sophos_ocsf",
+      "match_values": [
+        "sophos"
+      ]
+    },
+    {
+      "name": "squid_proxy_ocsf",
+      "match_values": [
+        "squid_proxy"
+      ]
+    },
+    {
+      "name": "suricata_ocsf",
+      "match_values": [
+        "suricata"
+      ]
+    },
+    {
+      "name": "syslog_ocsf",
+      "match_values": [
+        "syslog"
+      ]
+    },
+    {
+      "name": "sysmon_linux_xml_ocsf",
+      "match_values": [
+        "linux_sysmon"
+      ]
+    },
+    {
+      "name": "sysmon_xml_ocsf",
+      "match_values": [
+        "windows_sysmon"
+      ]
+    },
+    {
+      "name": "windows_event_ocsf",
+      "match_values": [
+        "windows_event"
+      ]
+    },
+    {
+      "name": "windows_event_text_ocsf",
+      "match_values": [
+        "windows_event"
+      ]
+    },
+    {
+      "name": "windows_event_xml_ocsf",
+      "match_values": [
+        "windows_event"
+      ]
+    },
+    {
+      "name": "windows_sysmon_ocsf",
+      "match_values": [
+        "windows_sysmon"
+      ]
+    },
+    {
+      "name": "zeek_ocsf",
+      "match_values": [
+        "zeek"
+      ]
+    },
+    {
+      "name": "zscaler_zia_ocsf",
+      "match_values": [
+        "zscaler_zia"
+      ]
+    }
+  ]
+}

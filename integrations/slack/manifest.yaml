@@ -4,8 +4,13 @@ category: collector
 description: "Pull workspace sign-in records from Slack access logs (needs the `admin` scope — not available on Pro)"
 icon: message-square
 author: nano
-version: 2
+version: 3
 changelog: >-
+  v3: the access-log stream names the OCSF parser (slack_access_ocsf) instead
+  of the pre-OCSF slack_access parser. Parser lookup is by name, and OCSF
+  tenants only carry the *_ocsf parsers, so the stream arrived unparsed on OCSF
+  tenants (NAN-3483). A stream that is already linked keeps its log source:
+  disable and re-enable it to provision against the OCSF parser.
   v2: the access-log stream now names the parser it needs (parser: slack_access)
   instead of relying on that parser to claim the slack_access_log source type.
   Resolution no longer depends on the parsers repo keeping that alias, so a
@@ -59,7 +64,7 @@ streams:
   - id: access_logs
     label: Sign-in records
     source_type: slack_access_log
-    parser: slack_access
+    parser: slack_access_ocsf
     default: true
     description: "Who signed in, from which IP, device and network"
 
