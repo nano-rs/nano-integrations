@@ -1,0 +1,68 @@
+name: Okta
+slug: okta_system_log
+category: collector
+description: "Pull sign-in, MFA, user lifecycle, group and admin events from the Okta System Log API"
+icon: shield
+author: nano
+version: 1
+changelog: >-
+  v1: initial release. Polls /api/v1/logs and resumes from Okta's own
+  rel="next" `after` token, so late or out-of-order events are neither skipped
+  nor repeated. Honours X-Rate-Limit-Reset on 429 and slows down before the
+  org quota runs out. A rejected token fails the run with Okta's error code.
+
+# Okta API tokens use the `SSWS <token>` scheme. The sandbox can only inject a
+# header value verbatim, so the collector builds the header from API_TOKEN
+# itself; auth_type stays `none` so nothing else is injected.
+auth_type: none
+
+requires_credential: required
+credential_fields:
+  - name: API_TOKEN
+    label: API token
+    field_type: secret
+    required: true
+    help: >-
+      Okta Admin Console → Security → API → Tokens → Create token. The token
+      acts as the admin who creates it, so create it as a Read-only
+      Administrator (enough for the System Log). Okta expires a token that
+      goes unused for 30 days. A poll every few minutes keeps it alive.
+
+config_fields:
+  - name: OKTA_DOMAIN
+    # `hostname` opts this field into the outbound host policy: the value must
+    # end with one of the allowed_domain_suffixes below.
+    label: Okta org domain
+    field_type: hostname
+    required: true
+    placeholder: "acme.okta.com"
+    help: >-
+      Your Okta org hostname, without https:// or a path. Use the org domain
+      (acme.okta.com), not a custom sign-in domain such as login.acme.com.
+
+allowed_domain_suffixes:
+  - ".okta.com"
+  - ".oktapreview.com"
+  - ".okta-emea.com"
+  - ".okta-gov.com"
+  - ".okta.mil"
+
+streams:
+  - id: system_log
+    label: System Log
+    source_type: okta
+    default: true
+    description: "Every System Log event: sign-ins and failures, MFA, SSO, user and group changes, policy and admin actions"
+
+config:
+  # The System Log endpoint allows 120 requests/minute on most orgs, and that
+  # quota is shared with every other client of the org. One page is 1000 events.
+  poll_schedule: "*/2 * * * *"
+  max_run_secs: 600
+  max_events_per_emit: 1000
+
+tags:
+  - saas
+  - authentication
+  - identity
+  - okta
