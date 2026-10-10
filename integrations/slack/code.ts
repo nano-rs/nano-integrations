@@ -180,12 +180,36 @@ function slackErrorMessage(code: string | undefined): string {
   }
 }
 
+/**
+ * Report a stream failure the way the host can attribute it, then rethrow.
+ *
+ * nano recovers the failing stream's NAME from this exact structured log — it
+ * is the only place an individual stream is still named, because collectors
+ * rethrow one aggregate at the end of a run. Without it the per-stream
+ * `last_error` stays NULL and a broken stream is indistinguishable from a quiet
+ * one in the UI (NAN-2280).
+ *
+ * The message string and the `stream` / `error` fields are a contract with the
+ * host, not free text. `code.test.ts` pins them.
+ */
 async function collect(ctx: CollectorContext): Promise<void> {
   if (!ctx.streams.includes(STREAM)) {
     ctx.log("Sign-in records stream not enabled, nothing to do");
     return;
   }
 
+  try {
+    await collectAccessLogs(ctx);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    ctx.log("Stream failed", { stream: STREAM, error: message });
+    // Rethrown so the run is still marked failed — this only adds attribution,
+    // it does not swallow the failure.
+    throw error;
+  }
+}
+
+async function collectAccessLogs(ctx: CollectorContext): Promise<void> {
   const watermark = readWatermark(ctx);
   ctx.log("Collecting sign-in records", { sinceEpoch: watermark });
 
