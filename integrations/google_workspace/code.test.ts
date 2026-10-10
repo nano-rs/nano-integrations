@@ -248,7 +248,7 @@ function paginatedStubApi(total: number, oldestMs: number) {
   globalThis.setTimeout = ((handler: () => void) => {
     handler();
     return 0;
-  }) as typeof setTimeout;
+  }) as unknown as typeof setTimeout;
 
   return {
     restore: () => {
