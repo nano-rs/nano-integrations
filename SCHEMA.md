@@ -1,7 +1,8 @@
 # Manifest schema
 
 Every integration is a directory under `integrations/` containing a
-`manifest.yaml` and a `code.ts`. This is the manifest reference.
+`manifest.yaml`, a `connector.yaml` and (until the connector cutover) a
+`code.ts`. This is the manifest reference.
 
 ```yaml
 name: Netskope                    # display name
@@ -54,6 +55,9 @@ config:
 tags:
   - casb
   - dlp
+
+runtime: deno                     # deno | connector
+connector_spec: connector.yaml    # the nano connector spec next to this file
 ```
 
 ## Fields
@@ -140,6 +144,18 @@ to a `source_type`, which is what routes events to a parser.
 
 Give every stream its own `source_type`. Collapsing several event classes into
 one source_type forces the parser to re-derive what the collector already knew.
+
+### Runtime
+
+| Key | Default | Notes |
+|---|---|---|
+| `runtime` | `deno` | Which runtime executes the entry: `deno` runs `code.ts`, `connector` runs the spec named by `connector_spec` on the nano connector engine. |
+| `connector_spec` | none | File name of the connector spec, next to the manifest (no paths). Required when `runtime: connector`. |
+
+Sync copies the spec into the catalog entry's config together with its
+SHA-256, and a configured feed pins that hash. A manifest may name a
+`connector_spec` while `runtime` is still `deno`: the spec ships alongside and
+the shadow run keeps the two in step until the switch.
 
 ### Runtime config
 

@@ -1,0 +1,94 @@
+# NAN-3490: every collector's code.ts must emit exactly what the connector.yaml
+# next to it emits, against the same mock, until cutover retires code.ts.
+#
+# `contract` always runs: the manifest <-> spec checks and the parser checks
+# need only Deno. `shadow` builds nano-connector from nanosiem (a private
+# repo) and runs the Deno-vs-connector diffs plus the metadata.uid check; it
+# needs the NANOSIEM_READ_TOKEN secret, which fork PRs do not get, so on a
+# fork it reports itself skipped instead of failing.
+name: shadow-run
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DENO_NO_UPDATE_CHECK: "1"
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.7
+      - name: Cache dependencies
+        run: deno cache testing/ocsf-parsers/manifests.test.ts testing/shadow/shadow.test.ts testing/shadow/driver.ts
+      - name: Manifest and parser checks
+        run: |
+          deno test --cached-only --allow-read testing/ocsf-parsers/manifests.test.ts
+          deno test --cached-only --allow-read --allow-write --allow-net=127.0.0.1 --allow-run --allow-env testing/shadow/shadow.test.ts
+
+  shadow:
+    runs-on: ubuntu-latest
+    env:
+      HAS_TOKEN: ${{ secrets.NANOSIEM_READ_TOKEN != '' }}
+    steps:
+      - name: Skip without the nanosiem token
+        if: env.HAS_TOKEN != 'true'
+        run: echo "::notice::NANOSIEM_READ_TOKEN is not available (fork PR?); Deno-vs-connector diffs skipped"
+      - uses: actions/checkout@v4
+        if: env.HAS_TOKEN == 'true'
+      - uses: actions/checkout@v4
+        if: env.HAS_TOKEN == 'true'
+        with:
+          repository: nano-rs/nanosiem
+          # The engine ref the specs are validated against.
+          ref: ${{ vars.NANO_CONNECTOR_REF || 'main' }}
+          token: ${{ secrets.NANOSIEM_READ_TOKEN }}
+          path: nanosiem
+          sparse-checkout: |
+            Cargo.toml
+            Cargo.lock
+            nano-connector
+      - uses: actions/checkout@v4
+        if: env.HAS_TOKEN == 'true'
+        with:
+          repository: nano-rs/parsers
+          ref: ocsf-1.9
+          path: parsers
+      - uses: dtolnay/rust-toolchain@stable
+        if: env.HAS_TOKEN == 'true'
+      - name: Build nano-connector
+        if: env.HAS_TOKEN == 'true'
+        # The sparse checkout holds only this crate; build it as its own
+        # workspace so the other members' manifests are not needed.
+        working-directory: nanosiem
+        run: |
+          python3 - <<'PY'
+          import re
+          ws = open("Cargo.toml").read()
+          pkg = re.search(r"\[workspace\.package\](.*?)(?=\n\[)", ws, re.S).group(1)
+          deps = re.search(r"\[workspace\.dependencies\](.*?)(?=\n\[|\Z)", ws, re.S).group(1)
+          open("Cargo.toml", "w").write(f'[workspace]\nmembers = ["nano-connector"]\nresolver = "2"\n\n[workspace.package]{pkg}\n[workspace.dependencies]{deps}')
+          PY
+          cargo build -p nano-connector --locked || cargo build -p nano-connector
+      - uses: denoland/setup-deno@v2
+        if: env.HAS_TOKEN == 'true'
+        with:
+          deno-version: 2.9.7
+      - name: Shadow runs
+        if: env.HAS_TOKEN == 'true'
+        env:
+          NANO_CONNECTOR_BIN: ${{ github.workspace }}/nanosiem/target/debug/nano-connector
+          NANO_PARSERS_DIR: ${{ github.workspace }}/parsers
+          NANO_SHADOW_REQUIRED: "1"
+        run: |
+          deno cache testing/shadow/shadow.test.ts testing/shadow/driver.ts integrations/*/code.ts
+          deno test --cached-only --allow-read --allow-write --allow-net=127.0.0.1 --allow-run --allow-env testing/shadow/shadow.test.ts

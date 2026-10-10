@@ -66,3 +66,9 @@ tags:
   - authentication
   - identity
   - okta
+
+# NAN-3490: connector.yaml is the declarative nano-connector spec that
+# replaces code.ts. `runtime` picks which one nano runs; it stays `deno` until
+# cutover, and the shadow-run harness keeps the two event-for-event identical.
+runtime: deno
+connector_spec: connector.yaml

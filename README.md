@@ -44,6 +44,12 @@ curl -X POST https://<your-nano>/api/marketplace/repos \
 | `slack` | Slack | User token (`admin` scope) | access_logs |
 | `google_workspace` | Google | Service-account JWT | login · admin · token · drive |
 | `okta_system_log` | Okta | API token (SSWS) | system_log |
+| `okta_users` | Okta | API token (SSWS) | users (identity enrichment, connector runtime only) |
+
+`okta_users` is not a log feed: it pulls the Okta user directory with
+`source_type: nano_enrich` and `kind: identity`, so nano routes it to the
+identity normalizers, not to a log parser. It has no `code.ts`; it runs only on
+the nano connector engine.
 
 **`slack` needs the `admin` user scope, which is not offered on Pro** — verified
 on a Pro workspace, where it does not appear in the scope picker at all. The
@@ -77,12 +83,25 @@ third-party apps hold which OAuth scopes.
 integrations/
   <slug>/
     manifest.yaml
+    connector.yaml
     code.ts
 ```
 
 - `manifest.yaml` — identity, credential and config fields, allowed outbound
   domains, and the list of event streams the integration can pull.
+- `connector.yaml` — the declarative nano connector spec (NAN-3490) that
+  replaces `code.ts`. The manifest's `runtime` says which of the two runs;
+  see [SCHEMA.md](SCHEMA.md#runtime). The spec format is documented in
+  nanosiem's `nano-connector/docs/AUTHORING.md`.
 - `code.ts` — TypeScript that runs in nano's Deno sandbox and does the pulling.
+  It stays until the cutover to the connector engine, then goes away.
+
+Custom Deno collectors written outside this repo have no conversion path; they
+stop running at the cutover.
+
+Every `connector.yaml` must pass the shadow run in `testing/shadow/` (it ships
+exactly what `code.ts` ships against the same mock, and the stream's parser
+derives a stable `metadata.uid`). See [testing/README.md](testing/README.md).
 
 Field mapping is **not** done here. Collectors emit raw vendor events; the
 [parsers repo](https://github.com/nano-rs/parsers) maps them to OCSF/UDM. Keep

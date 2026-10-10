@@ -1,0 +1,45 @@
+# nano-connector spec (NAN-3490): Okta directory users for the identity lane.
+# There is no Deno original. Each run walks /api/v1/users by Okta's own
+# rel="next" links and pushes every user as a nano_enrich identity record
+# (kind=identity, source=okta), the shape the okta_identity normalizer in the
+# parsers repo (enrichments/identity/okta) maps into user_registry. It is the
+# record shape the native Okta identity sync pushes today.
+version: 1
+name: okta_users
+kind: collector
+allow:
+  - host: "{{config.OKTA_DOMAIN}}"
+    host_suffixes: [".okta.com", ".oktapreview.com", ".okta-emea.com", ".okta-gov.com", ".okta.mil"]
+    path_prefixes: ["/api/v1/users"]
+auth: { type: okta_ssws, credential: API_TOKEN }
+schedule: "0 */6 * * *"
+rate_limit: { reset_header: X-Rate-Limit-Reset, remaining_header: X-Rate-Limit-Remaining, remaining_floor: 2 }
+streams:
+  - id: users
+    # The enrichment lane, not a log parser: Vector routes nano_enrich records
+    # with kind=identity to the identity normalizers.
+    source_type: nano_enrich
+    request:
+      url: "https://{{config.OKTA_DOMAIN}}/api/v1/users"
+      query: { limit: "200" }
+      headers: { Accept: application/json }
+    # A directory snapshot re-ships every user each run. lastUpdated is the
+    # version: an unchanged user keeps its id (a duplicate downstream), a
+    # changed user gets a new one.
+    ingest_id: { fields: [id, lastUpdated] }
+    program: |
+      status = to_int(.response.status) ?? 0
+      if status < 200 || status >= 300 {
+        {"error": "Okta returned " + to_string(status) + ": " + (string(.response.body.errorSummary) ?? "no summary")}
+      } else {
+        users = if is_array(.response.body) { array!(.response.body) } else { [] }
+        evs = map_values(users) -> |u| {
+          merge(object(u) ?? {}, {"kind": "identity", "source": "okta", "provider_id": "okta_users"})
+        }
+        next = string(.response.links.next) ?? ""
+        if next == "" {
+          {"events": evs}
+        } else {
+          {"events": evs, "next_request": {"url": next}}
+        }
+      }

@@ -1,0 +1,61 @@
+name: Okta Users
+slug: okta_users
+category: collector
+description: "Sync Okta directory users into nano's identity registry"
+icon: users
+author: nano
+version: 1
+changelog: >-
+  v1: initial release, on the nano-connector runtime (no Deno script). Walks
+  /api/v1/users every six hours and pushes each user to the identity lane,
+  where the okta_identity normalizer maps it into the user registry.
+
+requires_credential: required
+credential_fields:
+  - name: API_TOKEN
+    label: API token
+    field_type: secret
+    required: true
+    help: >-
+      Okta Admin Console → Security → API → Tokens → Create token, as a
+      Read-only Administrator. Okta expires a token that goes unused for 30
+      days; the six-hourly sync keeps it alive.
+
+config_fields:
+  - name: OKTA_DOMAIN
+    label: Okta org domain
+    field_type: hostname
+    required: true
+    placeholder: "acme.okta.com"
+    help: >-
+      Your Okta org hostname, without https:// or a path. Use the org domain
+      (acme.okta.com), not a custom sign-in domain.
+
+allowed_domain_suffixes:
+  - ".okta.com"
+  - ".oktapreview.com"
+  - ".okta-emea.com"
+  - ".okta-gov.com"
+  - ".okta.mil"
+
+streams:
+  - id: users
+    label: Directory users
+    # Identity lane, not a log stream: Vector routes nano_enrich records with
+    # kind=identity to the identity normalizers, so no OCSF parser applies.
+    source_type: nano_enrich
+    default: true
+    description: "Every Okta user with profile and status, refreshed every six hours"
+
+config:
+  poll_schedule: "0 */6 * * *"
+  max_run_secs: 600
+  max_events_per_emit: 1000
+
+tags:
+  - identity
+  - okta
+
+# NAN-3490: this integration exists only as a nano-connector spec.
+runtime: connector
+connector_spec: connector.yaml
