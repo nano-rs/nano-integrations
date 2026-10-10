@@ -134,6 +134,7 @@ to a `source_type`, which is what routes events to a parser.
 | `id` | yes | Stable id. Used as the cursor key — renaming resets the cursor. |
 | `label` | yes | Shown in the UI. |
 | `source_type` | yes | Must match a parser's `match_values` in the parsers repo. |
+| `parser` | no | The parser this stream needs, looked up by name. Must be an OCSF parser (`parsers-ocsf/` on the parsers repo's `ocsf-1.9` branch, e.g. `netskope_ocsf`) that claims `source_type`; `testing/ocsf-parsers/manifests.test.ts` enforces it. |
 | `default` | no | Pre-checked at install. Default `false`. |
 | `description` | no | One line under the toggle. |
 

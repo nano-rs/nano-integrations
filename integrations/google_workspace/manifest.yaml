@@ -4,8 +4,13 @@ category: collector
 description: "Pull login, admin and OAuth-grant audit events from the Google Workspace Reports API"
 icon: shield
 author: nano
-version: 4
+version: 5
 changelog: >-
+  v5: streams name the OCSF parser (google_workspace_ocsf) instead of the
+  pre-OCSF google_workspace parser. Parser lookup is by name, and OCSF tenants
+  only carry the *_ocsf parsers, so every stream provisioned on an OCSF tenant
+  arrived unparsed (NAN-3483). A stream that is already linked keeps its log
+  source: disable and re-enable it to provision against the OCSF parser.
   v4: keep older audit events reachable when a walk hits the 500-page ceiling
   or the run budget. Results arrive newest-first, so committing the newest event
   from an incomplete walk permanently skipped every page still below it. A
@@ -86,25 +91,25 @@ streams:
   - id: login
     label: Login events
     source_type: gws_login
-    parser: google_workspace
+    parser: google_workspace_ocsf
     default: true
     description: "Sign-ins, failures, suspicious-login flags and logout"
   - id: admin
     label: Admin console actions
     source_type: gws_admin
-    parser: google_workspace
+    parser: google_workspace_ocsf
     default: true
     description: "Every change an administrator made, and who made it"
   - id: token
     label: OAuth token grants
     source_type: gws_token
-    parser: google_workspace
+    parser: google_workspace_ocsf
     default: true
     description: "Third-party apps users authorized, and the scopes they hold"
   - id: drive
     label: Drive activity
     source_type: gws_drive
-    parser: google_workspace
+    parser: google_workspace_ocsf
     default: false
     description: "File access and sharing. Very high volume — enable deliberately."
 
