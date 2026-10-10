@@ -43,6 +43,7 @@ curl -X POST https://<your-nano>/api/marketplace/repos \
 | `netskope` | Netskope | API token | alert · page · application · audit · network · connection · incident · infrastructure · endpoint |
 | `slack` | Slack | User token (`admin` scope) | access_logs |
 | `google_workspace` | Google | Service-account JWT | login · admin · token · drive |
+| `okta_system_log` | Okta | API token (SSWS) | system_log |
 
 **`slack` needs the `admin` user scope, which is not offered on Pro** — verified
 on a Pro workspace, where it does not appear in the scope picker at all. The
@@ -53,6 +54,16 @@ your User Token Scopes picker before configuring.
 Note also that `team.accessLogs` returns mutable aggregate records rather than
 an append-only event stream, so re-delivery is guaranteed rather than
 incidental; see the collector's header comment.
+
+`okta_system_log` polls the Okta System Log (`/api/v1/logs`) and resumes from
+Okta's own `after` pagination token, so late or out-of-order events are neither
+skipped nor repeated. Its paging, cursor and back-off logic is a
+runtime-agnostic core (`pullSystemLog`) with every side effect injected; it is
+tested against `testing/okta-mock/`, a mock of Okta's paging, 429 and 401
+behaviour that also runs standalone (`deno run --allow-net --allow-env
+testing/okta-mock/mock.ts`). The System Log quota is shared with every other
+client of the org, so the collector also pauses when `X-Rate-Limit-Remaining`
+runs low.
 
 `google_workspace` needs a service account with **domain-wide delegation**
 authorized in the Admin console, impersonating a super-admin. Setup is a few
