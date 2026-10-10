@@ -1,0 +1,26 @@
+// Public Okta mock for NAN-3490 live connector-runner validation.
+// SYNTHETIC DATA ONLY. Deploying it is a live change: do it only as a step of
+// the validation plan, then `wrangler delete` when the run is over.
+//
+//   wrangler secret put MOCK_TOKEN      # 16+ chars; also the feed's API_TOKEN
+//   wrangler deploy                     # serves on nano-okta-mock.<account>.workers.dev
+{
+  "name": "nano-okta-mock",
+  "main": "worker.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "vars": {
+    "EPOCH": "2026-10-01T00:00:00Z",
+    "EVENTS_PER_MIN": "60",
+    "PAGE_MAX": "200",
+    // Every 50th event lands 60 s late: past the spec's 30 s lag, inside its
+    // 120 s lookback.
+    "LATE_EVERY": "50",
+    "LATE_MS": "60000",
+    // A 2 s 429 burst every 10 minutes.
+    "FAULT_429_EVERY_SECS": "600",
+    "FAULT_429_SECS": "2"
+  }
+}
