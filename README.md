@@ -50,6 +50,10 @@ curl -X POST https://<your-nano>/api/marketplace/repos \
 `source_type: nano_enrich` and `kind: identity`, so nano routes it to the
 identity normalizers, not to a log parser. It has no `code.ts`; it runs only on
 the nano connector engine.
+Its manifest declares `runtime: connector` and `connector_spec: connector.yaml`;
+nano's marketplace sync records both, plus the spec's `connector_spec_sha256`, on
+the catalog entry, so the platform can tell connector-only integrations apart
+from Deno ones without reading the repo.
 
 **`slack` needs the `admin` user scope, which is not offered on Pro** — verified
 on a Pro workspace, where it does not appear in the scope picker at all. The
