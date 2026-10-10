@@ -192,8 +192,10 @@ export function assertSame(d: Diff): void {
 
 /** Every collector event carries a non-empty `_nano_ingest_id`. */
 export function assertIngestIds(label: string, events: Record<string, Json>[]): void {
-  const missing = events.filter((e) => typeof e[INGEST_ID] !== "string" || e[INGEST_ID] === "").length;
-  if (missing > 0) throw new Error(`${label}: ${missing} of ${events.length} events lack ${INGEST_ID}`);
+  // `h:` is the engine's content-hash fallback: the spec's ingest_id fields
+  // were missing, so the id is not the vendor's.
+  const missing = events.filter((e) => typeof e[INGEST_ID] !== "string" || e[INGEST_ID] === "" || (e[INGEST_ID] as string).startsWith("h:")).length;
+  if (missing > 0) throw new Error(`${label}: ${missing} of ${events.length} events lack a vendor ${INGEST_ID}`);
 }
 
 /** Find `parsers-ocsf/<dir>/parser.yaml` whose `name:` is `parser`. */
