@@ -47,6 +47,34 @@ response after serving a page (`failAfterServe`) to prove a lost page is
 resent, not skipped. Runs standalone: `deno run --allow-net --allow-env
 testing/netskope-mock/mock.ts`.
 
+## `okta-mock-public`
+
+The target for a live connector-runner run (NAN-3490). The hosted runner can
+only reach public TLS names (its NetworkPolicy and the broker refuse private
+addresses), so `okta-mock` cannot be its target. `worker.ts` is a stateless
+Cloudflare Worker port: event `seq` is published at `EPOCH + seq * 60 s /
+EVENTS_PER_MIN` with `okta-mock`'s `makeEvent` body, so every isolate serves
+the same stream and a validator can compute what a feed must have shipped.
+It keeps Okta's paging (`since` / `until` / `after`, `Link rel="next"`), the
+SSWS token check, late events (`LATE_EVERY` / `LATE_MS`) and a fixed 429
+schedule (`FAULT_429_EVERY_SECS` / `FAULT_429_SECS`).
+`GET /__mock/expected?since=&until=` returns the count and the first and last
+uuid of `[since, until)`, with `final: true` once all of them are visible.
+
+The shipped `okta_system_log` spec allows only Okta's domains, so the feed runs
+a copy: `catalog.ts --host <mock host>` prints the `marketplace_catalog.config`
+for `okta_system_log_mock`, which is the shipped spec renamed and with its
+allowlist pinned to that one host. Nothing else differs (a test checks it).
+
+```sh
+# unit tests + a real nano-connector run against the mock (NANO_CONNECTOR_BIN)
+deno test --allow-read --allow-write --allow-net=127.0.0.1 --allow-run --allow-env \
+  testing/okta-mock-public/worker.test.ts
+# deploy (a live change: only as a step of the validation plan)
+cd testing/okta-mock-public && wrangler secret put MOCK_TOKEN && wrangler deploy
+deno run --allow-read testing/okta-mock-public/catalog.ts --host nano-okta-mock.<account>.workers.dev
+```
+
 ## `throughput-collector` (retired at the connector cutover)
 
 Nothing uses this harness except this README. It measures the Deno framed
