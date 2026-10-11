@@ -43,6 +43,7 @@ type Manifest = {
   slug: string;
   runtime?: string;
   connector_spec?: string;
+  hosted_connector_spec?: string;
   credential_fields?: { name: string }[];
   config_fields?: { name: string }[];
   streams?: Stream[];
@@ -270,6 +271,32 @@ Deno.test("every connector.yaml is declared by its manifest and only uses declar
     for (const ms of m.streams ?? []) {
       const ok = s.streams.some((ss) => ss.source_type === ms.source_type || (ss.fanout !== undefined && ss.source_type?.replace("{{item}}", ms.id) === ms.source_type));
       if (!ok) problems.push(`${where}/${ms.id}: no spec stream emits source_type ${ms.source_type}`);
+    }
+    // A hosted-only spec (NAN-3490) may differ from connector.yaml ONLY in its
+    // auth block, so the shadow run of connector.yaml covers what it collects.
+    if (m.hosted_connector_spec !== undefined) {
+      if (m.hosted_connector_spec !== "connector.hosted.yaml") problems.push(`${where}: hosted_connector_spec is not connector.hosted.yaml`);
+      let hostedText = "";
+      try {
+        hostedText = await Deno.readTextFile(new URL(m.hosted_connector_spec, dir(e.name)));
+      } catch {
+        problems.push(`${where}: hosted_connector_spec ${m.hosted_connector_spec} is missing`);
+      }
+      if (hostedText) {
+        const { auth: _a, ...rest } = s as Record<string, unknown>;
+        const { auth: hostedAuth, ...hostedRest } = parse(hostedText) as Record<string, unknown>;
+        try {
+          assertEquals(hostedRest, rest);
+        } catch {
+          problems.push(`${where}: connector.hosted.yaml differs from connector.yaml outside auth`);
+        }
+        for (const [k, v] of Object.entries((hostedAuth ?? {}) as Record<string, string>)) {
+          if ((k === "credential" || k.endsWith("_credential")) && !creds.has(v)) problems.push(`${where}: hosted auth uses credential ${v}, which the manifest does not declare`);
+        }
+        for (const [, k] of hostedText.matchAll(/(?:\{\{\s*config\.|\.config\.)([A-Z0-9_]+)/g)) {
+          if (!configs.has(k)) problems.push(`${where}: hosted spec reads config ${k}, which the manifest does not declare`);
+        }
+      }
     }
   }
   assert(n >= 5, `only ${n} connector specs found`);

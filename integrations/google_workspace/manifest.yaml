@@ -4,8 +4,15 @@ category: collector
 description: "Pull login, admin and OAuth-grant audit events from the Google Workspace Reports API"
 icon: shield
 author: nano
-version: 6
+version: 7
 changelog: >-
+  v7: hosted feeds are keyless (NAN-3490). nano's hosted runner reads
+  connector.hosted.yaml: the tenant's own nano service account signs the
+  domain-wide-delegation assertion through the pull broker (no key file
+  anywhere), and the hosted install asks for no credential. The Workspace admin
+  authorizes the client ID nano shows for the
+  admin.reports.audit.readonly scope. Dedicated (Deno) and self-hosted
+  connector.yaml keep the service-account key fields unchanged.
   v6: opt into tenant-scoped hosted Marketplace connector feeds with
   explicit OCSF parser linkage. Dedicated Deno execution stays unchanged.
   v5: streams name the OCSF parser (google_workspace_ocsf) instead of the
@@ -133,3 +140,5 @@ tags:
 # cutover, and the shadow-run harness keeps the two event-for-event identical.
 runtime: deno
 connector_spec: connector.yaml
+# Hosted runner only: keyless DWD via nano's pull broker (no credential fields).
+hosted_connector_spec: connector.hosted.yaml

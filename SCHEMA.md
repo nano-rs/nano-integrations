@@ -151,6 +151,7 @@ one source_type forces the parser to re-derive what the collector already knew.
 |---|---|---|
 | `runtime` | `deno` | Which runtime executes the entry: `deno` runs `code.ts`, `connector` runs the spec named by `connector_spec` on the nano connector engine. |
 | `connector_spec` | none | File name of the connector spec, next to the manifest (no paths). Required when `runtime: connector`. |
+| `hosted_connector_spec` | none | Optional hosted-only spec, next to the manifest (no paths). nano's hosted runner uses it instead of `connector_spec`; self-hosted and open core keep `connector_spec`. For platform-managed auth the hosted runner can do without a customer secret (e.g. keyless Google DWD). The hosted install asks only for the credential fields that this spec's auth reads. |
 
 Sync copies the spec into the catalog entry's config together with its
 SHA-256, and a configured feed pins that hash. A manifest may name a
