@@ -4,8 +4,10 @@ category: collector
 description: "Pull login, admin and OAuth-grant audit events from the Google Workspace Reports API"
 icon: shield
 author: nano
-version: 5
+version: 6
 changelog: >-
+  v6: opt into tenant-scoped hosted Marketplace connector feeds with
+  explicit OCSF parser linkage. Dedicated Deno execution stays unchanged.
   v5: streams name the OCSF parser (google_workspace_ocsf) instead of the
   pre-OCSF google_workspace parser. Parser lookup is by name, and OCSF tenants
   only carry the *_ocsf parsers, so every stream provisioned on an OCSF tenant
@@ -114,6 +116,8 @@ streams:
     description: "File access and sharing. Very high volume — enable deliberately."
 
 config:
+  # Hosted UI uses source-bound connector feeds; dedicated Deno remains unchanged.
+  hosted_connector: true
   poll_schedule: "*/10 * * * *"
   max_run_secs: 600
   max_events_per_emit: 1000
