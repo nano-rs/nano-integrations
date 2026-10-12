@@ -29,10 +29,10 @@ jobs:
         with:
           deno-version: 2.9.7
       - name: Cache dependencies
-        run: deno cache testing/ocsf-parsers/manifests.test.ts testing/shadow/shadow.test.ts testing/shadow/driver.ts testing/okta-mock-public/worker.test.ts
+        run: deno cache testing/ocsf-parsers/manifests.test.ts testing/shadow/shadow.test.ts testing/shadow/driver.ts testing/okta-mock-public/worker.test.ts testing/directory-mocks/mocks.test.ts
       - name: Manifest and parser checks
         run: |
-          deno test --cached-only --allow-read testing/ocsf-parsers/manifests.test.ts
+          deno test --cached-only --allow-read testing/ocsf-parsers/manifests.test.ts testing/directory-mocks/mocks.test.ts
           deno test --cached-only --allow-read --allow-write --allow-net=127.0.0.1 --allow-run --allow-env testing/shadow/shadow.test.ts testing/okta-mock-public/worker.test.ts
 
   shadow:

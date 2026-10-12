@@ -1,0 +1,15 @@
+[
+ {
+  "method": "GET",
+  "host": "graph.microsoft.com",
+  "path": "/v1.0/users/delta()",
+  "status": 410,
+  "body": "",
+  "query": {
+   "$deltatoken": "eyJzZXEiOjQsInNlbCI6WyJpZCIsInVzZXJQcmluY2lwYWxOYW1lIiwibWFpbCIsImRpc3BsYXlOYW1lIiwiZ2l2ZW5OYW1lIiwic3VybmFtZSIsImRlcGFydG1lbnQiLCJqb2JUaXRsZSIsImNvbXBhbnlOYW1lIiwib2ZmaWNlTG9jYXRpb24iLCJjaXR5IiwiY291bnRyeSIsImFjY291bnRFbmFibGVkIiwiZW1wbG95ZWVJZCIsImVtcGxveWVlVHlwZSIsInVzZXJUeXBlIiwiY3JlYXRlZERhdGVUaW1lIiwibW9iaWxlUGhvbmUiLCJidXNpbmVzc1Bob25lcyIsIm1hbmFnZXIiXX0"
+  },
+  "headers": {
+   "location": "https://graph.microsoft.com/v1.0/users/delta?$deltatoken="
+  }
+ }
+]

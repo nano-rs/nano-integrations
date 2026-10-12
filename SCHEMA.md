@@ -142,6 +142,10 @@ to a `source_type`, which is what routes events to a parser.
 | `default` | no | Pre-checked at install. Default `false`. |
 | `description` | no | One line under the toggle. |
 
+Two reserved values route nowhere near a parser: `nano_enrich` (records for
+the enrichment lane) and `nano_identity` (streams of a `kind: identity` spec;
+see Components below). Neither may name a `parser`.
+
 Give every stream its own `source_type`. Collapsing several event classes into
 one source_type forces the parser to re-derive what the collector already knew.
 
@@ -157,6 +161,72 @@ Sync copies the spec into the catalog entry's config together with its
 SHA-256, and a configured feed pins that hash. A manifest may name a
 `connector_spec` while `runtime` is still `deno`: the spec ships alongside and
 the shadow run keeps the two in step until the switch.
+
+### Components and categories (marketplace layout)
+
+Optional and additive: a manifest without them keeps working, and nano
+deployments that predate them ignore both keys. They let one vendor card
+offer several things a customer turns on separately, such as Google
+Workspace audit logs and the Google Workspace directory.
+
+```yaml
+categories: [logs, identity]      # marketplace sections this card lists under
+components:
+  - id: audit_logs                # stable id, [a-z0-9_]
+    label: Audit logs
+    kind: logs                    # logs | identity
+    description: "One line under the component toggle"
+    streams: [login, admin]       # logs: ids from this manifest's `streams`
+    default: true                 # pre-selected at install
+    setup:                        # shown in the install drawer
+      scopes: ["https://www.googleapis.com/auth/admin.reports.audit.readonly"]
+      steps: ["Markdown, one string per step"]
+  - id: directory
+    label: Directory
+    kind: identity
+    connector_spec: directory.connector.yaml               # identity: the spec
+    hosted_connector_spec: directory.connector.hosted.yaml # optional hosted twin
+    config_fields: [ADMIN_EMAIL, PRIVILEGED_GROUPS]        # fields this component reads
+    default: false
+    setup:
+      scopes: [...]               # OAuth scopes the customer must grant
+      permissions: [...]          # vendor roles / API permissions, plain text
+      steps: [...]                # markdown strings, in order
+```
+
+| Key | Required | Notes |
+|---|---|---|
+| `categories` | no | Marketplace sections: `logs`, `identity`. A card with an `identity` component lists under Identity. Without it the card lists by `category` as before. |
+| `components[].id` | yes | Stable; the install records which components are on. |
+| `components[].label` | yes | Shown on the card. |
+| `components[].kind` | yes | `logs` (rows go to ingest through parsers) or `identity` (rows go to nano's identity snapshot; no parser, no log source). |
+| `components[].description` | no | One line. |
+| `components[].streams` | `logs` | Ids from this manifest's `streams`. Every stream belongs to at most one component. |
+| `components[].connector_spec` | `identity` | Spec file next to the manifest (no paths), `kind: identity`. Usually not the manifest's own `connector_spec`, so a logs entry can add a directory without changing its log streams. |
+| `components[].hosted_connector_spec` | no | Hosted twin of the component's spec. Same rule as the top-level one: it may differ from `connector_spec` only in its `auth` block. |
+| `components[].config_fields` | no | Names from `config_fields` this component reads, so the install form can show only those. Every config field an identity spec reads must be listed. |
+| `components[].default` | no | Pre-selected at install. Default `false`. |
+| `components[].setup` | no | `scopes`, `permissions`, `steps` (all lists of strings; `steps` are markdown). |
+
+An entry whose only purpose is a directory (Okta Users, Entra ID) declares
+one `identity` component whose `connector_spec` is the manifest's own. Its
+manifest `streams` mirror the spec's stream ids with `source_type:
+nano_identity`, the marker for identity rows (never a parser, never a log
+source). `testing/shadow/shadow.test.ts` checks every component: specs exist,
+are `kind: identity`, read only declared fields, and a hosted twin differs
+only in `auth`.
+
+### Identity specs (`kind: identity`)
+
+An identity spec emits canonical directory rows instead of log events. Each
+stream sets `identity.role`: `users` streams emit one row per user
+(`external_id` plus profile fields such as `email`, `upn`, `department`,
+`manager_upn`, `account_status`, `is_admin`), `memberships` streams emit
+`{member, group, privileged}` that nano aggregates into each user's groups.
+`identity.mode: delta` on a users stream lets runs between full snapshots
+ship only changes (`deleted: true` rows are tombstones); a top-level
+`identity.full_every_secs` forces a full snapshot at least that often. See the
+nano-connector authoring guide for the canonical field list.
 
 ### Runtime config
 

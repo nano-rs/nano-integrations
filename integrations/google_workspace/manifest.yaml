@@ -4,13 +4,21 @@ category: collector
 description: "Pull login, admin and OAuth-grant audit events from the Google Workspace Reports API"
 icon: shield
 author: nano
-version: 8
+version: 9
 changelog: >-
-  v8: start point-forward (NAN-3697). A new stream now starts at the
+  v9: start point-forward (NAN-3697). A new stream now starts at the
   activation time minus 5 minutes instead of 24 hours back, and the first run
   pins that start even when it finds nothing. Existing cursors are resumed
   unchanged; an unreadable cursor restarts at the initial cursor and logs it
   loudly. There is no backfill option.
+  v8: new Directory component (NAN-3503): Workspace users and group
+  memberships synced into nano's identity registry from the Admin SDK
+  Directory API (directory.connector.yaml, hosted
+  directory.connector.hosted.yaml). It needs two more read-only scopes on the
+  SAME domain-wide delegation entry: admin.directory.user.readonly and
+  admin.directory.group.readonly. Edit the existing entry and keep the reports
+  scope; replacing it stops the audit logs. Audit log streams are unchanged.
+  New optional PRIVILEGED_GROUPS config field (directory only).
   v7: hosted feeds are keyless (NAN-3490). nano's hosted runner reads
   connector.hosted.yaml: the tenant's own nano service account signs the
   domain-wide-delegation assertion through the pull broker (no key file
@@ -93,6 +101,15 @@ config_fields:
       never mentions delegation. In the Admin console: Security → Access and
       data control → API controls → Domain-wide delegation → add the service
       account's client ID with the admin.reports.audit.readonly scope.
+  - name: PRIVILEGED_GROUPS
+    label: Privileged groups (directory)
+    field_type: string
+    required: false
+    placeholder: "admins@yourdomain.com, security@yourdomain.com"
+    help: >-
+      Directory component only, optional. Comma-separated group emails or
+      names whose members nano treats as administrators, in addition to
+      Workspace super admins and delegated admins.
 
 # Both hosts are fixed — Google is not per-tenant, so no suffix allowlist is
 # needed. The token endpoint must be listed too: the assertion exchange is an
@@ -139,6 +156,43 @@ tags:
   - authentication
   - google
   - identity
+
+# NAN-3503 marketplace layout: one Google Workspace card with two components.
+categories:
+  - logs
+  - identity
+
+components:
+  - id: audit_logs
+    label: Audit logs
+    kind: logs
+    description: "Login, admin, OAuth-grant and Drive activity from the Reports API"
+    streams: [login, admin, token, drive]
+    default: true
+    setup:
+      scopes:
+        - "https://www.googleapis.com/auth/admin.reports.audit.readonly"
+      steps:
+        - "In the Google Admin console open **Security → Access and data control → API controls → Manage Domain Wide Delegation**."
+        - "Add the client ID nano shows on this page with the scope `https://www.googleapis.com/auth/admin.reports.audit.readonly`."
+        - "Enter a super admin's email in Admin to impersonate."
+  - id: directory
+    label: Directory
+    kind: identity
+    description: "Users, managers, 2-Step Verification, admin flags and group memberships from the Directory API"
+    connector_spec: directory.connector.yaml
+    hosted_connector_spec: directory.connector.hosted.yaml
+    config_fields: [ADMIN_EMAIL, PRIVILEGED_GROUPS]
+    default: false
+    setup:
+      scopes:
+        - "https://www.googleapis.com/auth/admin.directory.user.readonly"
+        - "https://www.googleapis.com/auth/admin.directory.group.readonly"
+      steps:
+        - "In the Google Admin console open **Security → Access and data control → API controls → Manage Domain Wide Delegation**."
+        - "**Edit the existing entry** for nano's client ID (the one audit logs already use). Do not add a second entry and do not remove the reports scope: Google keeps one scope list per client ID, and replacing it stops the audit logs."
+        - "Append `https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.group.readonly` to the comma-separated scope list and click **Authorize**. Changes can take a few minutes to apply."
+        - "The admin in Admin to impersonate must be able to read users and groups (a super admin can)."
 
 # NAN-3490: connector.yaml is the declarative nano-connector spec that
 # replaces code.ts. `runtime` picks which one nano runs; it stays `deno` until
