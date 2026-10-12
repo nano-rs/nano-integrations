@@ -1,0 +1,20 @@
+[
+ {
+  "method": "GET",
+  "host": "graph.microsoft.com",
+  "path": "/v1.0/users/delta()",
+  "status": 400,
+  "body": {
+   "error": {
+    "code": "syncStateNotFound",
+    "message": "The sync state cannot be found.",
+    "innerError": {
+     "request-id": "mock"
+    }
+   }
+  },
+  "query": {
+   "$deltatoken": "eyJzZXEiOjAsInNlbCI6WyJpZCIsIm1hbmFnZXIiXX0"
+  }
+ }
+]
