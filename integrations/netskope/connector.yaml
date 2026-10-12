@@ -9,8 +9,9 @@
 #               `op: resend` without `opened`, and the next run re-opens at
 #               the pinned `start` epoch instead of resending on an iterator
 #               that never opened.
-#   start       epoch seconds the iterator is opened at, pinned before the
-#               first request so a re-open after a crash cannot skip ahead.
+#   start       epoch seconds the iterator is opened at (the initial cursor,
+#               NAN-3697), pinned before the first request so a re-open after
+#               a crash cannot skip ahead.
 # The engine commits `op: resend` ahead of every fetch (write_ahead_state), and
 # a 5xx or dropped connection on `next` is retried as `resend`
 # (retry_rewrite), since the failed request may already have moved the index.
@@ -51,7 +52,11 @@ streams:
         } else {
           start = string(.state.start) ?? ""
           if start == "" {
-            t = if is_string(.backfill_from) { parse_timestamp(string!(.backfill_from), "%+") ?? now() } else { now() }
+            # Point-forward (NAN-3697): open at the engine's initial cursor;
+            # `.backfill_from` is its deprecated alias on older engines; with
+            # neither, now - 300 s. Never epoch 0 (full retention replay).
+            ic = string(.initial_cursor) ?? string(.backfill_from) ?? ""
+            t = parse_timestamp(ic, "%+") ?? from_unix_timestamp(to_unix_timestamp(now(), unit: "seconds") - 300) ?? now()
             start = to_string(to_unix_timestamp(t, unit: "seconds"))
           }
           {"state": {"start": start},

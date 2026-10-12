@@ -33,6 +33,9 @@ interface CollectorContext {
   credentials: Record<string, string>;
   config: Record<string, string>;
   streams: string[];
+  /** First-run start, ISO-8601: activation time − 5 min, computed by the host (NAN-3697). */
+  initialCursor?: string;
+  /** Deprecated alias of `initialCursor`, carrying the same value. */
   backfillFrom?: string;
   emit(streamId: string, events: unknown[]): Promise<void>;
   checkpoint(streamId: string, cursor: string): Promise<void>;
@@ -82,26 +85,57 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Watermark: the highest `date_last` shipped so far, as epoch seconds.
+ * NAN-3697: every collector starts point-forward. A stream with no cursor
+ * starts at the host's `initialCursor` (activation − 5 min); there is no
+ * backfill option. The same rule lives in the nano-connector engine
+ * (`.initial_cursor`), and this helper is duplicated verbatim in each
+ * single-file collector.
+ */
+export const INITIAL_OVERLAP_MS = 300_000;
+
+/**
+ * Epoch ms a stream with no cursor starts at.
+ *
+ * `initialCursor` wins. `backfillFrom` is read only as the deprecated alias an
+ * older host sends — and clamped, because on such a host it may still be an
+ * operator backfill. With neither, now − INITIAL_OVERLAP_MS. Never earlier
+ * than that, never all-history.
+ */
+export function initialCursorMs(
+  ctx: { initialCursor?: string; backfillFrom?: string; log(msg: string, fields?: Record<string, unknown>): void },
+  now: number = Date.now(),
+): number {
+  const floor = now - INITIAL_OVERLAP_MS;
+  if (ctx.initialCursor) {
+    const parsed = Date.parse(ctx.initialCursor);
+    if (!Number.isNaN(parsed)) return parsed;
+    ctx.log("Ignoring unparseable initialCursor", { value: ctx.initialCursor });
+  }
+  if (ctx.backfillFrom) {
+    const parsed = Date.parse(ctx.backfillFrom);
+    if (!Number.isNaN(parsed)) return Math.max(parsed, floor);
+    ctx.log("Ignoring unparseable backfillFrom", { value: ctx.backfillFrom });
+  }
+  return floor;
+}
+
+/**
+ * Watermark: the highest `date_last` shipped so far, as epoch seconds, plus
+ * whether it came from a stored cursor.
  *
  * Deliberately not "the newest record's timestamp at run start" — a session
  * active during the run would be missed on the next one.
  */
-function readWatermark(ctx: CollectorContext): number {
+function readWatermark(ctx: CollectorContext): { watermark: number; resumed: boolean } {
   const raw = ctx.cursors[STREAM];
   if (raw) {
     const parsed = Number.parseInt(raw, 10);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    if (Number.isFinite(parsed) && parsed > 0) return { watermark: parsed, resumed: true };
+    ctx.log("Ignoring unparseable cursor; restarting at the initial cursor", { value: raw });
   }
-  if (ctx.backfillFrom) {
-    const parsed = Date.parse(ctx.backfillFrom);
-    if (!Number.isNaN(parsed)) return Math.floor(parsed / 1000);
-    ctx.log("Ignoring unparseable backfillFrom", { value: ctx.backfillFrom });
-  }
-  // No cursor and no explicit backfill: take everything Slack still holds. The
-  // volume is bounded (one record per user/IP/device, not per sign-in), so this
-  // is a few pages rather than an unbounded history.
-  return 0;
+  // No cursor: start point-forward (NAN-3697). Never 0 — that would ship
+  // every record Slack still holds.
+  return { watermark: Math.floor(initialCursorMs(ctx) / 1000), resumed: false };
 }
 
 async function fetchPage(
@@ -186,8 +220,8 @@ async function collect(ctx: CollectorContext): Promise<void> {
     return;
   }
 
-  const watermark = readWatermark(ctx);
-  ctx.log("Collecting sign-in records", { sinceEpoch: watermark });
+  const { watermark, resumed } = readWatermark(ctx);
+  ctx.log("Collecting sign-in records", { sinceEpoch: watermark, resumed });
 
   let cursor: string | undefined;
   let attempt = 0;
@@ -247,7 +281,9 @@ async function collect(ctx: CollectorContext): Promise<void> {
   }
 
   // Only commit once every page that was going to be emitted has been acked.
-  if (newest > watermark) {
+  // A first run commits its starting watermark even with nothing new, so the
+  // start is pinned rather than recomputed (and drifting) on every run.
+  if (newest > watermark || !resumed) {
     await ctx.checkpoint(STREAM, String(newest));
   }
 

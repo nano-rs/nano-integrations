@@ -4,8 +4,12 @@ category: collector
 description: "Pull sign-in, MFA, user lifecycle, group and admin events from the Okta System Log API"
 icon: shield
 author: nano
-version: 2
+version: 3
 changelog: >-
+  v3: start point-forward (NAN-3697). A new instance now starts at the
+  activation time minus 5 minutes instead of now, so the first poll does not
+  miss events from the minutes around activation. Existing cursors are resumed
+  unchanged. There is no backfill option.
   v2: opt into tenant-scoped hosted Marketplace connector feeds with
   explicit OCSF parser linkage. Dedicated Deno execution stays unchanged.
   v1: initial release. Polls /api/v1/logs and resumes from Okta's own

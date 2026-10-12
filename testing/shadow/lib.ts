@@ -108,7 +108,9 @@ export async function runConnector(
     creds?: Record<string, string>;
     credFiles?: Record<string, string>;
     artifact?: [string, string];
-    backfillFrom?: string;
+    /** Pins the engine clock (RFC 3339). The first-run start is now − 300 s
+     *  (NAN-3697), so mocks put their events inside that window. */
+    now?: string;
     checkpoints?: Record<string, Json>;
   } = {},
 ): Promise<ConnectorRun> {
@@ -117,7 +119,7 @@ export async function runConnector(
   for (const [k, v] of Object.entries(opts.creds ?? {})) args.push("--cred", `${k}=${v}`);
   for (const [k, v] of Object.entries(opts.credFiles ?? {})) args.push("--cred-file", `${k}=${await tempFile(k, v)}`);
   if (opts.artifact) args.push("--artifact", opts.artifact[0], "--type", opts.artifact[1]);
-  if (opts.backfillFrom) args.push("--backfill-from", opts.backfillFrom);
+  if (opts.now) args.push("--now", opts.now);
   if (opts.checkpoints) args.push("--checkpoints", await tempFile("checkpoints.json", JSON.stringify(opts.checkpoints)));
   const out = await new Deno.Command(connectorBin, { args, stdout: "piped", stderr: "piped" }).output();
   const text = new TextDecoder().decode(out.stdout);

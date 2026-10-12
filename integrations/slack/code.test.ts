@@ -17,7 +17,7 @@
 //   deno test integrations/slack/code.test.ts
 
 import { assertEquals } from "jsr:@std/assert@1";
-import { collect } from "./code.ts";
+import { collect, INITIAL_OVERLAP_MS, initialCursorMs } from "./code.ts";
 
 interface SlackLogin {
   user_id: string;
@@ -51,11 +51,22 @@ function stubApi(getLogins: () => SlackLogin[]) {
   return { restore: () => { globalThis.fetch = original; } };
 }
 
-function makeCtx(cursors: Record<string, string | undefined>) {
+const NOW = Math.floor(Date.now() / 1000);
+
+/** The host's initial cursor for the NAN-2272 cases: activation two hours ago. */
+const ACTIVATED_2H_AGO = new Date((NOW - 7200) * 1000).toISOString();
+
+function makeCtx(
+  cursors: Record<string, string | undefined>,
+  start: { initialCursor?: string; backfillFrom?: string } = { initialCursor: ACTIVATED_2H_AGO },
+) {
   const emitted: SlackLogin[] = [];
+  const checkpoints: string[] = [];
   return {
     emitted,
+    checkpoints,
     ctx: {
+      ...start,
       cursors,
       credentials: { TOKEN: "xoxp-test" },
       config: {},
@@ -65,6 +76,7 @@ function makeCtx(cursors: Record<string, string | undefined>) {
         return Promise.resolve();
       },
       checkpoint: (s: string, cursor: string) => {
+        checkpoints.push(cursor);
         cursors[s] = cursor;
         return Promise.resolve();
       },
@@ -73,8 +85,6 @@ function makeCtx(cursors: Record<string, string | undefined>) {
     },
   };
 }
-
-const NOW = Math.floor(Date.now() / 1000);
 
 Deno.test("slack does NOT re-emit an unchanged boundary record", async () => {
   const record = login("U1", NOW - 3600);
@@ -113,6 +123,136 @@ Deno.test("slack DOES re-emit a record whose date_last moved", async () => {
     await collect(run2.ctx as never);
     assertEquals(run2.emitted.length, 1, "a mutated record must re-ship");
     assertEquals(run2.emitted[0].count, 2);
+  } finally {
+    api.restore();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// NAN-3697: point-forward start. Slack has no "since" parameter, so the start
+// is the watermark the walk filters on and the cursor the first run commits.
+// The clock is pinned by stubbing Date.now.
+// ---------------------------------------------------------------------------
+
+const FAKE_NOW_MS = Date.parse("2026-10-12T15:00:00.000Z");
+const FAKE_NOW_S = FAKE_NOW_MS / 1000;
+const iso = (s: number) => new Date(s * 1000).toISOString();
+
+async function atFakeNow(fn: () => Promise<void>): Promise<void> {
+  const real = Date.now;
+  Date.now = () => FAKE_NOW_MS;
+  try {
+    await fn();
+  } finally {
+    Date.now = real;
+  }
+}
+
+/** Old history, one record exactly on the start, and two inside the window. */
+function historyAroundStart(): SlackLogin[] {
+  return [
+    login("U-new", FAKE_NOW_S - 10),
+    login("U-mid", FAKE_NOW_S - 299),
+    login("U-edge", FAKE_NOW_S - 300),
+    login("U-old", FAKE_NOW_S - 301),
+    login("U-ancient", FAKE_NOW_S - 90 * 86400),
+  ];
+}
+
+Deno.test("NAN-3697 initialCursorMs: initialCursor, clamped alias, else now - 300 s", () => {
+  const log = () => {};
+  assertEquals(INITIAL_OVERLAP_MS, 300_000);
+  assertEquals(initialCursorMs({ initialCursor: iso(FAKE_NOW_S - 300), log }, FAKE_NOW_MS), FAKE_NOW_MS - 300_000);
+  assertEquals(initialCursorMs({ log }, FAKE_NOW_MS), FAKE_NOW_MS - 300_000);
+  assertEquals(initialCursorMs({ initialCursor: "garbage", log }, FAKE_NOW_MS), FAKE_NOW_MS - 300_000);
+  // An old host's operator backfill is clamped: never earlier than now - 300 s.
+  assertEquals(initialCursorMs({ backfillFrom: iso(FAKE_NOW_S - 30 * 86400), log }, FAKE_NOW_MS), FAKE_NOW_MS - 300_000);
+  // initialCursor wins over a far-past alias.
+  assertEquals(
+    initialCursorMs({ initialCursor: iso(FAKE_NOW_S - 300), backfillFrom: iso(FAKE_NOW_S - 30 * 86400), log }, FAKE_NOW_MS),
+    FAKE_NOW_MS - 300_000,
+  );
+});
+
+Deno.test("NAN-3697 slack: no cursor starts exactly at initialCursor (now - 300 s)", async () => {
+  const api = stubApi(historyAroundStart);
+  try {
+    await atFakeNow(async () => {
+      const h = makeCtx({}, { initialCursor: iso(FAKE_NOW_S - 300), backfillFrom: iso(FAKE_NOW_S - 300) });
+      await collect(h.ctx as never);
+      assertEquals(h.emitted.map((l) => l.user_id), ["U-new", "U-mid"]);
+      assertEquals(h.checkpoints, [String(FAKE_NOW_S - 10)]);
+    });
+  } finally {
+    api.restore();
+  }
+});
+
+Deno.test("NAN-3697 slack: an empty first run pins its start as the cursor", async () => {
+  const api = stubApi(() => [login("U-old", FAKE_NOW_S - 3600)]);
+  try {
+    await atFakeNow(async () => {
+      const h = makeCtx({}, { initialCursor: iso(FAKE_NOW_S - 300) });
+      await collect(h.ctx as never);
+      assertEquals(h.emitted.length, 0);
+      assertEquals(h.checkpoints, [String(FAKE_NOW_S - 300)]);
+    });
+  } finally {
+    api.restore();
+  }
+});
+
+Deno.test("NAN-3697 slack: no initialCursor (old host) still starts at now - 300 s", async () => {
+  const api = stubApi(historyAroundStart);
+  try {
+    await atFakeNow(async () => {
+      const h = makeCtx({}, {});
+      await collect(h.ctx as never);
+      assertEquals(h.emitted.map((l) => l.user_id), ["U-new", "U-mid"]);
+    });
+  } finally {
+    api.restore();
+  }
+});
+
+Deno.test("NAN-3697 slack: initialCursor wins over a far-past backfillFrom", async () => {
+  const api = stubApi(historyAroundStart);
+  try {
+    await atFakeNow(async () => {
+      const h = makeCtx({}, { initialCursor: iso(FAKE_NOW_S - 300), backfillFrom: iso(FAKE_NOW_S - 365 * 86400) });
+      await collect(h.ctx as never);
+      assertEquals(h.emitted.map((l) => l.user_id), ["U-new", "U-mid"]);
+    });
+  } finally {
+    api.restore();
+  }
+});
+
+Deno.test("NAN-3697 slack: an old host's far-past backfillFrom alone is clamped to now - 300 s", async () => {
+  const api = stubApi(historyAroundStart);
+  try {
+    await atFakeNow(async () => {
+      const h = makeCtx({}, { backfillFrom: iso(FAKE_NOW_S - 365 * 86400) });
+      await collect(h.ctx as never);
+      assertEquals(h.emitted.map((l) => l.user_id), ["U-new", "U-mid"]);
+    });
+  } finally {
+    api.restore();
+  }
+});
+
+Deno.test("NAN-3697 slack: an existing cursor is resumed, never reset to a later initialCursor", async () => {
+  const api = stubApi(historyAroundStart);
+  try {
+    await atFakeNow(async () => {
+      const cursor = String(FAKE_NOW_S - 120 * 86400);
+      const h = makeCtx({ access_logs: cursor }, { initialCursor: iso(FAKE_NOW_S - 300) });
+      await collect(h.ctx as never);
+      // Everything after the stored cursor ships, including what predates the
+      // initial cursor.
+      assertEquals(h.emitted.map((l) => l.user_id), ["U-new", "U-mid", "U-edge", "U-old", "U-ancient"]);
+      assertEquals(h.checkpoints, [String(FAKE_NOW_S - 10)]);
+    });
   } finally {
     api.restore();
   }

@@ -4,8 +4,11 @@ category: collector
 description: "Pull events and alerts from a Netskope tenant via the REST API v2 Data Export iterator"
 icon: cloud
 author: nano
-version: 5
+version: 6
 changelog: >-
+  v6: start point-forward (NAN-3697). A new iterator opens at the activation
+  time minus 5 minutes instead of now. Existing iterators are resumed
+  unchanged. There is no backfill option.
   v5: streams name the OCSF parser (netskope_ocsf) instead of the pre-OCSF
   netskope parser. Parser lookup is by name, and OCSF tenants only carry the
   *_ocsf parsers, so every stream provisioned on an OCSF tenant arrived

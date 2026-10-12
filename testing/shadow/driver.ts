@@ -106,7 +106,10 @@ try {
       config: input.config ?? {},
       streams: input.streams ?? [],
       cursors: input.cursors ?? {},
-      backfillFrom: input.backfill_from ?? undefined,
+      // The host's first-run start (NAN-3697), plus the deprecated alias the
+      // production host still sends with the same value.
+      initialCursor: input.initial_cursor ?? undefined,
+      backfillFrom: input.initial_cursor ?? undefined,
       emit: async (stream: string, events: unknown[]) => {
         emits.push([stream, events]);
       },
