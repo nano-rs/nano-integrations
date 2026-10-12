@@ -6,6 +6,42 @@
   "status": 200,
   "body": [
    {
+    "id": "00udir00000000000000",
+    "status": "DEPROVISIONED",
+    "created": "2025-01-01T00:00:00.000Z",
+    "activated": "2025-01-01T00:00:00.000Z",
+    "statusChanged": "2026-10-01T00:00:00.000Z",
+    "lastLogin": "2026-10-09T12:00:00.000Z",
+    "lastUpdated": "2026-10-01T00:00:00.000Z",
+    "passwordChanged": "2025-06-01T00:00:00.000Z",
+    "type": {
+     "id": "otymock"
+    },
+    "profile": {
+     "login": "okta0@example.com",
+     "email": "okta0@example.com",
+     "firstName": "Okta",
+     "lastName": "User0",
+     "displayName": null,
+     "department": "Finance",
+     "title": "Synthetic",
+     "manager": null,
+     "managerId": null,
+     "employeeNumber": "E30000",
+     "userType": "Contractor",
+     "organization": "Example Corp",
+     "city": "Ottawa",
+     "countryCode": "CA",
+     "mobilePhone": null,
+     "primaryPhone": "+1 555 0100"
+    },
+    "_links": {
+     "self": {
+      "href": "https://acme.okta.com/api/v1/users/00udir00000000000000"
+     }
+    }
+   },
+   {
     "id": "00udir00000000000001",
     "status": "ACTIVE",
     "created": "2025-01-01T00:00:00.000Z",
@@ -688,7 +724,24 @@
       "href": "https://acme.okta.com/api/v1/users/00udir00000000000013"
      }
     }
-   },
+   }
+  ],
+  "query": {
+   "search": "status eq \"STAGED\" or status eq \"PROVISIONED\" or status eq \"ACTIVE\" or status eq \"RECOVERY\" or status eq \"PASSWORD_EXPIRED\" or status eq \"LOCKED_OUT\" or status eq \"SUSPENDED\" or status eq \"DEPROVISIONED\""
+  },
+  "headers": {
+   "link": "<https://acme.okta.com/api/v1/users?limit=200&search=status+eq+%22STAGED%22+or+status+eq+%22PROVISIONED%22+or+status+eq+%22ACTIVE%22+or+status+eq+%22RECOVERY%22+or+status+eq+%22PASSWORD_EXPIRED%22+or+status+eq+%22LOCKED_OUT%22+or+status+eq+%22SUSPENDED%22+or+status+eq+%22DEPROVISIONED%22>; rel=\"self\", <https://acme.okta.com/api/v1/users?limit=200&search=status+eq+%22STAGED%22+or+status+eq+%22PROVISIONED%22+or+status+eq+%22ACTIVE%22+or+status+eq+%22RECOVERY%22+or+status+eq+%22PASSWORD_EXPIRED%22+or+status+eq+%22LOCKED_OUT%22+or+status+eq+%22SUSPENDED%22+or+status+eq+%22DEPROVISIONED%22&after=20>; rel=\"next\"",
+   "x-rate-limit-limit": "600",
+   "x-rate-limit-remaining": "500",
+   "x-rate-limit-reset": "1791763201"
+  }
+ },
+ {
+  "method": "GET",
+  "host": "acme.okta.com",
+  "path": "/api/v1/users",
+  "status": 200,
+  "body": [
    {
     "id": "00udir00000000000014",
     "status": "ACTIVE",
@@ -724,21 +777,7 @@
       "href": "https://acme.okta.com/api/v1/users/00udir00000000000014"
      }
     }
-   }
-  ],
-  "headers": {
-   "link": "<https://acme.okta.com/api/v1/users?limit=200>; rel=\"self\", <https://acme.okta.com/api/v1/users?limit=200&after=21>; rel=\"next\"",
-   "x-rate-limit-limit": "600",
-   "x-rate-limit-remaining": "500",
-   "x-rate-limit-reset": "1791763201"
-  }
- },
- {
-  "method": "GET",
-  "host": "acme.okta.com",
-  "path": "/api/v1/users",
-  "status": 200,
-  "body": [
+   },
    {
     "id": "00udir00000000000015",
     "status": "ACTIVE",
@@ -808,6 +847,42 @@
     "_links": {
      "self": {
       "href": "https://acme.okta.com/api/v1/users/00udir00000000000016"
+     }
+    }
+   },
+   {
+    "id": "00udir00000000000017",
+    "status": "DEPROVISIONED",
+    "created": "2025-01-01T00:00:00.000Z",
+    "activated": "2025-01-01T00:00:00.000Z",
+    "statusChanged": "2026-10-01T00:00:00.000Z",
+    "lastLogin": "2026-10-09T12:00:00.000Z",
+    "lastUpdated": "2026-10-01T00:00:00.000Z",
+    "passwordChanged": "2025-06-01T00:00:00.000Z",
+    "type": {
+     "id": "otymock"
+    },
+    "profile": {
+     "login": "okta23@example.com",
+     "email": "okta23@example.com",
+     "firstName": "Okta",
+     "lastName": "User23",
+     "displayName": "Okta User23",
+     "department": "Engineering",
+     "title": "Synthetic",
+     "manager": "Okta User0",
+     "managerId": "okta0@example.com",
+     "employeeNumber": "E30023",
+     "userType": "Employee",
+     "organization": "Example Corp",
+     "city": "Ottawa",
+     "countryCode": "CA",
+     "mobilePhone": "+1 555 0300",
+     "primaryPhone": "+1 555 0100"
+    },
+    "_links": {
+     "self": {
+      "href": "https://acme.okta.com/api/v1/users/00udir00000000000017"
      }
     }
    },
@@ -1386,7 +1461,25 @@
       "href": "https://acme.okta.com/api/v1/users/00udir00000000000027"
      }
     }
-   },
+   }
+  ],
+  "query": {
+   "search": "status eq \"STAGED\" or status eq \"PROVISIONED\" or status eq \"ACTIVE\" or status eq \"RECOVERY\" or status eq \"PASSWORD_EXPIRED\" or status eq \"LOCKED_OUT\" or status eq \"SUSPENDED\" or status eq \"DEPROVISIONED\"",
+   "after": "20"
+  },
+  "headers": {
+   "link": "<https://acme.okta.com/api/v1/users?limit=200&search=status+eq+%22STAGED%22+or+status+eq+%22PROVISIONED%22+or+status+eq+%22ACTIVE%22+or+status+eq+%22RECOVERY%22+or+status+eq+%22PASSWORD_EXPIRED%22+or+status+eq+%22LOCKED_OUT%22+or+status+eq+%22SUSPENDED%22+or+status+eq+%22DEPROVISIONED%22&after=20>; rel=\"self\", <https://acme.okta.com/api/v1/users?limit=200&search=status+eq+%22STAGED%22+or+status+eq+%22PROVISIONED%22+or+status+eq+%22ACTIVE%22+or+status+eq+%22RECOVERY%22+or+status+eq+%22PASSWORD_EXPIRED%22+or+status+eq+%22LOCKED_OUT%22+or+status+eq+%22SUSPENDED%22+or+status+eq+%22DEPROVISIONED%22&after=40>; rel=\"next\"",
+   "x-rate-limit-limit": "600",
+   "x-rate-limit-remaining": "500",
+   "x-rate-limit-reset": "1791763201"
+  }
+ },
+ {
+  "method": "GET",
+  "host": "acme.okta.com",
+  "path": "/api/v1/users",
+  "status": 200,
+  "body": [
    {
     "id": "00udir00000000000028",
     "status": "ACTIVE",
@@ -1458,24 +1551,7 @@
       "href": "https://acme.okta.com/api/v1/users/00udir00000000000029"
      }
     }
-   }
-  ],
-  "query": {
-   "after": "21"
-  },
-  "headers": {
-   "link": "<https://acme.okta.com/api/v1/users?limit=200&after=21>; rel=\"self\", <https://acme.okta.com/api/v1/users?limit=200&after=42>; rel=\"next\"",
-   "x-rate-limit-limit": "600",
-   "x-rate-limit-remaining": "500",
-   "x-rate-limit-reset": "1791763201"
-  }
- },
- {
-  "method": "GET",
-  "host": "acme.okta.com",
-  "path": "/api/v1/users",
-  "status": 200,
-  "body": [
+   },
    {
     "id": "00udir0000000000002a",
     "status": "SUSPENDED",
@@ -1586,10 +1662,11 @@
    }
   ],
   "query": {
-   "after": "42"
+   "search": "status eq \"STAGED\" or status eq \"PROVISIONED\" or status eq \"ACTIVE\" or status eq \"RECOVERY\" or status eq \"PASSWORD_EXPIRED\" or status eq \"LOCKED_OUT\" or status eq \"SUSPENDED\" or status eq \"DEPROVISIONED\"",
+   "after": "40"
   },
   "headers": {
-   "link": "<https://acme.okta.com/api/v1/users?limit=200&after=42>; rel=\"self\"",
+   "link": "<https://acme.okta.com/api/v1/users?limit=200&search=status+eq+%22STAGED%22+or+status+eq+%22PROVISIONED%22+or+status+eq+%22ACTIVE%22+or+status+eq+%22RECOVERY%22+or+status+eq+%22PASSWORD_EXPIRED%22+or+status+eq+%22LOCKED_OUT%22+or+status+eq+%22SUSPENDED%22+or+status+eq+%22DEPROVISIONED%22&after=40>; rel=\"self\"",
    "x-rate-limit-limit": "600",
    "x-rate-limit-remaining": "500",
    "x-rate-limit-reset": "1791763201"
@@ -2213,6 +2290,93 @@
   ],
   "headers": {
    "link": "<https://acme.okta.com/api/v1/groups/00gdir00000000000002/users?limit=200>; rel=\"self\"",
+   "x-rate-limit-limit": "600",
+   "x-rate-limit-remaining": "500",
+   "x-rate-limit-reset": "1791763201"
+  }
+ },
+ {
+  "method": "GET",
+  "host": "acme.okta.com",
+  "path": "/api/v1/iam/assignees/users",
+  "status": 200,
+  "body": {
+   "value": [
+    {
+     "id": "00udir00000000000001",
+     "orn": "orn:okta:directory:mock:users:00udir00000000000001",
+     "_links": {
+      "self": {
+       "href": "https://acme.okta.com/api/v1/users/00udir00000000000001"
+      }
+     }
+    },
+    {
+     "id": "00udir00000000000002",
+     "orn": "orn:okta:directory:mock:users:00udir00000000000002",
+     "_links": {
+      "self": {
+       "href": "https://acme.okta.com/api/v1/users/00udir00000000000002"
+      }
+     }
+    }
+   ],
+   "_links": {}
+  },
+  "headers": {
+   "x-rate-limit-limit": "600",
+   "x-rate-limit-remaining": "500",
+   "x-rate-limit-reset": "1791763201"
+  }
+ },
+ {
+  "method": "GET",
+  "host": "acme.okta.com",
+  "path": "/api/v1/users/00udir00000000000001/roles",
+  "status": 200,
+  "body": [
+   {
+    "id": "ra1dir0000000100",
+    "label": "User Admin",
+    "type": "USER_ADMIN",
+    "status": "ACTIVE",
+    "created": "2025-01-01T00:00:00.000Z",
+    "lastUpdated": "2026-10-01T00:00:00.000Z",
+    "assignmentType": "USER"
+   }
+  ],
+  "headers": {
+   "x-rate-limit-limit": "600",
+   "x-rate-limit-remaining": "500",
+   "x-rate-limit-reset": "1791763201"
+  }
+ },
+ {
+  "method": "GET",
+  "host": "acme.okta.com",
+  "path": "/api/v1/users/00udir00000000000002/roles",
+  "status": 200,
+  "body": [
+   {
+    "id": "ra1dir0000000200",
+    "label": "Read Only Admin",
+    "type": "READ_ONLY_ADMIN",
+    "status": "ACTIVE",
+    "created": "2025-01-01T00:00:00.000Z",
+    "lastUpdated": "2026-10-01T00:00:00.000Z",
+    "assignmentType": "USER"
+   },
+   {
+    "id": "ra1dir0000000201",
+    "label": "Help Desk Admin",
+    "type": "HELP_DESK_ADMIN",
+    "status": "ACTIVE",
+    "created": "2025-01-01T00:00:00.000Z",
+    "lastUpdated": "2026-10-01T00:00:00.000Z",
+    "assignmentType": "USER"
+   }
+  ],
+  "headers": {
    "x-rate-limit-limit": "600",
    "x-rate-limit-remaining": "500",
    "x-rate-limit-reset": "1791763201"

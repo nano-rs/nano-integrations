@@ -710,5 +710,92 @@
    "x-rate-limit-remaining": "500",
    "x-rate-limit-reset": "1791763201"
   }
+ },
+ {
+  "method": "GET",
+  "host": "acme.okta.com",
+  "path": "/api/v1/iam/assignees/users",
+  "status": 200,
+  "body": {
+   "value": [
+    {
+     "id": "00udir00000000000001",
+     "orn": "orn:okta:directory:mock:users:00udir00000000000001",
+     "_links": {
+      "self": {
+       "href": "https://acme.okta.com/api/v1/users/00udir00000000000001"
+      }
+     }
+    },
+    {
+     "id": "00udir00000000000002",
+     "orn": "orn:okta:directory:mock:users:00udir00000000000002",
+     "_links": {
+      "self": {
+       "href": "https://acme.okta.com/api/v1/users/00udir00000000000002"
+      }
+     }
+    }
+   ],
+   "_links": {}
+  },
+  "headers": {
+   "x-rate-limit-limit": "600",
+   "x-rate-limit-remaining": "500",
+   "x-rate-limit-reset": "1791763201"
+  }
+ },
+ {
+  "method": "GET",
+  "host": "acme.okta.com",
+  "path": "/api/v1/users/00udir00000000000001/roles",
+  "status": 200,
+  "body": [
+   {
+    "id": "ra1dir0000000100",
+    "label": "User Admin",
+    "type": "USER_ADMIN",
+    "status": "ACTIVE",
+    "created": "2025-01-01T00:00:00.000Z",
+    "lastUpdated": "2026-10-01T00:00:00.000Z",
+    "assignmentType": "USER"
+   }
+  ],
+  "headers": {
+   "x-rate-limit-limit": "600",
+   "x-rate-limit-remaining": "500",
+   "x-rate-limit-reset": "1791763201"
+  }
+ },
+ {
+  "method": "GET",
+  "host": "acme.okta.com",
+  "path": "/api/v1/users/00udir00000000000002/roles",
+  "status": 200,
+  "body": [
+   {
+    "id": "ra1dir0000000200",
+    "label": "Read Only Admin",
+    "type": "READ_ONLY_ADMIN",
+    "status": "ACTIVE",
+    "created": "2025-01-01T00:00:00.000Z",
+    "lastUpdated": "2026-10-01T00:00:00.000Z",
+    "assignmentType": "USER"
+   },
+   {
+    "id": "ra1dir0000000201",
+    "label": "Help Desk Admin",
+    "type": "HELP_DESK_ADMIN",
+    "status": "ACTIVE",
+    "created": "2025-01-01T00:00:00.000Z",
+    "lastUpdated": "2026-10-01T00:00:00.000Z",
+    "assignmentType": "USER"
+   }
+  ],
+  "headers": {
+   "x-rate-limit-limit": "600",
+   "x-rate-limit-remaining": "500",
+   "x-rate-limit-reset": "1791763201"
+  }
  }
 ]

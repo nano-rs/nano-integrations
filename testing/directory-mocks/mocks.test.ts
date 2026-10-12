@@ -5,7 +5,7 @@ import { assert, assertEquals, assertMatch } from "jsr:@std/assert@1";
 import { MockGoogleDirectory } from "./google.ts";
 import { GRAPH, MockGraph } from "./graph.ts";
 import { MockOktaDirectory, OKTA_BASE_UPDATED } from "./okta.ts";
-import { buildRecordings, recordingsDir } from "./record.ts";
+import { buildRecordings, OKTA_EVERY_STATUS, recordingsDir } from "./record.ts";
 
 type J = Record<string, unknown>;
 const get = async (h: (r: Request) => Response | Promise<Response>, url: string, auth: string) => {
@@ -154,7 +154,9 @@ Deno.test("okta: list omits DEPROVISIONED, pages by Link, search includes it", a
     for (const u of r.body as J[]) ids.push(u.id as string);
     url = nextLink(r.headers.get("link"));
   }
-  assertEquals(ids.length, 50 - 3); // users 0, 23, 46 are DEPROVISIONED
+  assertEquals(ids.length, 50 - 3 - 2); // users 0, 23, 46 are DEPROVISIONED, 8 and 45 STAGED (plain list omits both)
+  const every = await get(m.handle, `https://acme.okta.com/api/v1/users?limit=200&search=${encodeURIComponent(OKTA_EVERY_STATUS)}`, auth);
+  assertEquals((every.body as J[]).length, 20, "first page of every status");
   m.update(7, "2026-10-11T10:00:00.000Z", { status: "DEPROVISIONED" });
   const s = await get(m.handle, `https://acme.okta.com/api/v1/users?search=${encodeURIComponent('lastUpdated gt "2026-10-05T00:00:00.000Z"')}`, auth);
   assertEquals((s.body as J[]).map((u) => u.status), ["DEPROVISIONED"]);
@@ -174,6 +176,32 @@ Deno.test("okta: 429 with Retry-After and reset, 401 on a bad token, group membe
   assertEquals((await get(m.handle, "https://acme.okta.com/api/v1/users", "SSWS nope")).status, 401);
   const gm = await get(m.handle, `https://acme.okta.com/api/v1/groups/${m.groups[1].id}/users`, auth);
   assertEquals((gm.body as J[]).length, 5);
+});
+
+Deno.test("okta: an all-STAGED org is invisible to the plain list, whole to the status search", async () => {
+  const m = new MockOktaDirectory({ users: 24, allStaged: true, admins: { 5: ["USER_ADMIN"] } });
+  const auth = `SSWS ${m.token}`;
+  assertEquals(((await get(m.handle, "https://acme.okta.com/api/v1/users", auth)).body as J[]).length, 0);
+  const all = await get(m.handle, `https://acme.okta.com/api/v1/users?search=${encodeURIComponent(OKTA_EVERY_STATUS)}`, auth);
+  assertEquals((all.body as J[]).length, 24);
+  const assignees = await get(m.handle, "https://acme.okta.com/api/v1/iam/assignees/users", auth);
+  assertEquals((assignees.body.value as J[]).map((v) => v.id), [m.user(5).id]);
+  const roles = await get(m.handle, `https://acme.okta.com/api/v1/users/${m.user(5).id}/roles`, auth);
+  assertEquals((roles.body as J[]).map((r) => r.type), ["USER_ADMIN"]);
+  assertEquals(((await get(m.handle, `https://acme.okta.com/api/v1/users/${m.user(6).id}/roles`, auth)).body as J[]).length, 0);
+});
+
+Deno.test("okta: assignees page by _links.next.href", async () => {
+  const m = new MockOktaDirectory({ users: 300, admins: Object.fromEntries(Array.from({ length: 150 }, (_, i) => [i * 2, ["READ_ONLY_ADMIN"]])), origin: "https://acme.okta.com" });
+  const auth = `SSWS ${m.token}`;
+  let url: string | undefined = "https://acme.okta.com/api/v1/iam/assignees/users";
+  const ids = new Set<unknown>();
+  while (url) {
+    const r = await get(m.handle, url, auth);
+    for (const v of r.body.value as J[]) ids.add(v.id);
+    url = ((r.body._links as J).next as J | undefined)?.href as string | undefined;
+  }
+  assertEquals(ids.size, 150);
 });
 
 Deno.test("okta: 500k users are generated lazily and the last page is cheap", async () => {

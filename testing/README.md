@@ -160,7 +160,9 @@ includeDerivedMembership), Microsoft Graph (`graph.ts`: users with
 `$expand=manager` and its 100-row page cap, users/delta with
 `$deltatoken=latest`, `@removed`, `manager@delta`, 410 / syncStateNotFound
 expiry, groups, transitiveMembers, directoryRoles) and Okta (`okta.ts`: users
-generated lazily so 500k costs nothing, Link paging, `search=lastUpdated gt`,
+generated lazily so 500k costs nothing, a plain list that omits STAGED and
+DEPROVISIONED like Okta, `search` on status or `lastUpdated gt`, Link paging,
+admin role assignees and per-user roles,
 429 with Retry-After, 401 on a bad token, group members). Each has a
 `faults.throttle(n)` switch and runs standalone (`deno run --allow-net
 testing/directory-mocks/okta.ts`).

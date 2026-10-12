@@ -124,8 +124,10 @@ async function graph(): Promise<Recordings> {
   };
 }
 
-async function okta(): Promise<Recordings> {
-  const m = new MockOktaDirectory({ users: 45, groups: 3, membersPerGroup: 5, pageMax: 20, origin: OKTA, now: () => Date.parse("2026-10-12T00:00:00Z") });
+export const OKTA_EVERY_STATUS = ["STAGED", "PROVISIONED", "ACTIVE", "RECOVERY", "PASSWORD_EXPIRED", "LOCKED_OUT", "SUSPENDED", "DEPROVISIONED"]
+  .map((x) => `status eq "${x}"`).join(" or ");
+
+async function oktaRecordings(m: MockOktaDirectory): Promise<{ full: () => Promise<Recorded[]>; memberships: () => Promise<Recorded[]>; walk: (u: string, k: string[]) => Promise<Recorded[]>; auth: RequestInit }> {
   const auth = { headers: { Authorization: `SSWS ${m.token}` } };
   const walk = async (start: string, keys: string[]): Promise<Recorded[]> => {
     const out: Recorded[] = [];
@@ -142,9 +144,27 @@ async function okta(): Promise<Recordings> {
     for (const r of [...out]) {
       for (const g of r.body as { id: string }[]) out.push(...await walk(`${OKTA}/api/v1/groups/${g.id}/users?limit=200`, ["after"]));
     }
+    // Admin roles: assignees (body _links.next.href paging), then each user's roles.
+    let next: string | undefined = `${OKTA}/api/v1/iam/assignees/users?limit=100`;
+    const holders: string[] = [];
+    while (next) {
+      const r = await record(m.handle, next, auth, ["after"]);
+      out.push(r);
+      const b = r.body as { value: { id: string }[]; _links: { next?: { href: string } } };
+      holders.push(...b.value.map((v) => v.id));
+      next = b._links.next?.href;
+    }
+    for (const id of holders) out.push(await record(m.handle, `${OKTA}/api/v1/users/${id}/roles`, auth, []));
     return out;
   };
-  const full = [...await walk(`${OKTA}/api/v1/users?limit=200`, ["after", "search"]), ...await memberships()];
+  const full = async () => [...await walk(`${OKTA}/api/v1/users?limit=200&search=${encodeURIComponent(OKTA_EVERY_STATUS)}`, ["after", "search"]), ...await memberships()];
+  return { full, memberships, walk, auth };
+}
+
+async function okta(): Promise<Recordings> {
+  const m = new MockOktaDirectory({ users: 45, groups: 3, membersPerGroup: 5, pageMax: 20, origin: OKTA, now: () => Date.parse("2026-10-12T00:00:00Z") });
+  const { full, memberships, walk } = await oktaRecordings(m);
+  const fullRec = await full();
 
   // Delta: the program asks lastUpdated gt (cursor - 300 s).
   m.update(7, "2026-10-11T10:00:00.000Z", { status: "DEPROVISIONED" });
@@ -157,14 +177,21 @@ async function okta(): Promise<Recordings> {
   const delta2 = await walk(`${OKTA}/api/v1/users?limit=200&search=${encodeURIComponent(`lastUpdated gt "${since2}"`)}`, ["after", "search"]);
 
   m.faults.throttle(1, 1);
-  const throttled = [await record(m.handle, `${OKTA}/api/v1/users?limit=200`, auth, ["after"]), ...await walk(`${OKTA}/api/v1/users?limit=200`, ["after"])];
+  const first = `${OKTA}/api/v1/users?limit=200&search=${encodeURIComponent(OKTA_EVERY_STATUS)}`;
+  const throttled = [await record(m.handle, first, (await oktaRecordings(m)).auth, ["after", "search"]), ...await full()];
+
+  // The shape of the NAN-3503 integrator test org (synthetic ids): 24 users
+  // created with activate=false (all STAGED), 4 groups, one USER_ADMIN.
+  const staged = new MockOktaDirectory({ users: 24, groups: 4, membersPerGroup: 4, pageMax: 200, origin: OKTA, allStaged: true, admins: { 5: ["USER_ADMIN"] }, now: () => Date.parse("2026-10-12T00:00:00Z") });
+  const stagedRec = await (await oktaRecordings(staged)).full();
   return {
-    okta_full: full,
+    okta_full: fullRec,
     okta_delta_since_baseline: [...deltaUsers, ...await memberships()],
     "okta_delta_since_baseline.state": { users: { last_updated: OKTA_BASE_UPDATED, seen_max: "" } },
     okta_delta: [...delta2, ...await memberships()],
     "okta_delta.state": { users: { last_updated: "2026-10-11T10:30:00.000Z", seen_max: "" } },
-    okta_429: [...throttled, ...await memberships()],
+    okta_429: throttled,
+    okta_staged_org: stagedRec,
   };
 }
 

@@ -2,25 +2,35 @@
 # memberships, synced into nano's identity snapshot (kind: identity; no HEC,
 # no parser, no log source). Replaces the v1 nano_enrich collector.
 #
-# users (mode delta): a full run walks GET /api/v1/users by Okta's rel="next"
-#   links and is a complete snapshot (the list endpoint omits DEPROVISIONED
-#   users, so they drop out of it). Between full runs (identity.full_every_secs)
-#   a delta run asks /api/v1/users?search=lastUpdated gt "<cursor>", which DOES
-#   return DEPROVISIONED users, so a deprovisioning lands within one schedule
-#   tick as account_status=deprovisioned, account_enabled=false. The cursor is
+# users (mode delta): a full run walks GET /api/v1/users?search=<every status>
+#   by Okta's rel="next" links and is a complete snapshot. The plain list (no
+#   search/filter) leaves out STAGED and DEPROVISIONED users, so the full run
+#   names all eight statuses explicitly. Between full runs
+#   (identity.full_every_secs) a delta run asks
+#   /api/v1/users?search=lastUpdated gt "<cursor>", which returns every status,
+#   so a deprovisioning lands within one schedule tick as
+#   account_status=deprovisioned, account_enabled=false. The cursor is
 #   the newest lastUpdated seen, minus a five-minute overlap for Okta's search
 #   index lag; replays are idempotent. It only advances when a walk completes.
 # groups: one sub-pull per group (fan-out discovered from /api/v1/groups),
 #   GET /api/v1/groups/{id}/users, emitting {member: <user id>, group: <group
 #   name>, privileged}. Groups named in PRIVILEGED_GROUPS (comma list,
 #   case-insensitive) mark their members privileged.
+# roles: one sub-pull per user holding an admin role (fan-out discovered from
+#   /api/v1/iam/assignees/users, okta.roles.read), GET /api/v1/users/{id}/roles,
+#   emitting {member: <user id>, group: "role:<type>", privileged: true}.
+#
+# Auth: this self-hosted spec uses an SSWS API token. The hosted twin
+# (connector.hosted.yaml) is keyless: an Okta API Services app trusts nano's
+# pull broker JWKS (private_key_jwt client credentials, scoped
+# okta.users.read okta.groups.read okta.roles.read).
 version: 1
 name: okta_users
 kind: identity
 allow:
   - host: "{{config.OKTA_DOMAIN}}"
     host_suffixes: [".okta.com", ".oktapreview.com", ".okta-emea.com", ".okta-gov.com", ".okta.mil"]
-    path_prefixes: ["/api/v1/users", "/api/v1/groups"]
+    path_prefixes: ["/api/v1/users", "/api/v1/groups", "/api/v1/iam/assignees/users", "/oauth2/v1/token"]
 auth: { type: okta_ssws, credential: API_TOKEN }
 schedule: "0 * * * *"
 limits: { max_run_secs: 3600, max_pages: 5000, max_requests: 20000 }
@@ -45,7 +55,8 @@ streams:
         } else if mode == "delta" {
           {"restart_full": true}
         } else {
-          {"state": {"last_updated": "", "seen_max": ""}, "next_request": {"url": "https://" + domain + "/api/v1/users", "query": {"limit": "200"}}}
+          every = "status eq \"STAGED\" or status eq \"PROVISIONED\" or status eq \"ACTIVE\" or status eq \"RECOVERY\" or status eq \"PASSWORD_EXPIRED\" or status eq \"LOCKED_OUT\" or status eq \"SUSPENDED\" or status eq \"DEPROVISIONED\""
+          {"state": {"last_updated": "", "seen_max": ""}, "next_request": {"url": "https://" + domain + "/api/v1/users", "query": {"limit": "200", "search": every}}}
         }
       } else {
         status = to_int(.response.status) ?? 0
@@ -141,4 +152,38 @@ streams:
         } else {
           {"events": evs, "next_request": {"url": next}}
         }
+      }
+  - id: roles
+    identity: { role: memberships }
+    fanout:
+      discover:
+        from: request
+        request:
+          url: "https://{{config.OKTA_DOMAIN}}/api/v1/iam/assignees/users"
+          query: { limit: "100" }
+          headers: { Accept: application/json }
+        response: { events_path: value }
+        # NAN-3503 lane A: the IAM APIs page with an absolute URL in the body
+        # (_links.next.href), not a Link header. Same `next_url` stepper as
+        # Graph's @odata.nextLink.
+        pagination: { type: next_url, pointer: "/_links/next/href" }
+      item_key: id
+      concurrency: 2
+      max_items: 10000
+    request:
+      url: "https://{{config.OKTA_DOMAIN}}/api/v1/users/{{item.id}}/roles"
+      headers: { Accept: application/json }
+    program: |
+      status = to_int(.response.status) ?? 0
+      if status < 200 || status >= 300 {
+        {"error": "Okta role assignments returned " + to_string(status) + ": " + (string(.response.body.errorSummary) ?? "no summary")}
+      } else {
+        member = string(.item.id) ?? ""
+        roles = filter(array(.response.body) ?? []) -> |_i, r| { r.status != "INACTIVE" }
+        evs = map_values(roles) -> |r| {
+          t = string(r.type) ?? ""
+          if t == "" { t = string(r.label) ?? "unknown" }
+          {"member": member, "group": "role:" + t, "privileged": true}
+        }
+        {"events": evs}
       }

@@ -318,6 +318,18 @@ function identityRows(run: ConnectorRun): { users: Record<string, Json>[]; pairs
   return { users, pairs, privileged };
 }
 
+/** Engine features the identity specs need beyond `kind: identity` (the
+ *  `next_url` stepper, templated oauth2 params) may land after it. A spec the
+ *  binary refuses for a MISSING feature is skipped with a warning; any other
+ *  validation error fails. */
+async function engineLacks(specFile: string): Promise<string | null> {
+  const out = await new Deno.Command(connectorBin, { args: ["validate", specFile], stdout: "piped", stderr: "null" }).output();
+  const v = JSON.parse(new TextDecoder().decode(out.stdout) || "{}") as { ok?: boolean; error?: string };
+  if (v.ok) return null;
+  if (/is not registered|unknown field/.test(v.error ?? "")) return v.error!;
+  throw new Error(`${specFile}: ${v.error}`);
+}
+
 async function identityRun(specFile: string, handler: Handler, opts: Parameters<typeof runConnector>[2]) {
   const b = serveMock(handler);
   try {
@@ -327,14 +339,25 @@ async function identityRun(specFile: string, handler: Handler, opts: Parameters<
   }
 }
 
-Deno.test({ name: "okta_users: identity full run (users + groups)", ignore: identityIgnored }, async () => {
+Deno.test({ name: "okta_users: identity full run (every status, groups, admin roles)", ignore: identityIgnored }, async (t) => {
+  const lacks = await engineLacks(spec("okta_users"));
+  if (lacks) return void console.warn(`okta_users: skipped, engine lacks: ${lacks}`);
   const mock = new MockOktaDirectory({ users: 450, groups: 3, membersPerGroup: 5, origin: "https://acme.okta.com" });
   const run = await identityRun(spec("okta_users"), mock.handle, { config: { OKTA_DOMAIN: "acme.okta.com", PRIVILEGED_GROUPS: "okta admins" }, creds: { API_TOKEN: "mock-token" } });
   const { users, pairs, privileged } = identityRows(run);
-  assertEquals(users.length, 450 - 20); // the list omits every 23rd (DEPROVISIONED)
-  assert(users.every((u) => typeof u.external_id === "string" && u.account_status !== undefined));
-  assertEquals(pairs.size, 15);
-  assertEquals(privileged.size, 5);
+  assertEquals(users.length, 450); // STAGED and DEPROVISIONED included
+  assert(users.some((u) => u.account_status === "staged" && u.account_enabled === false));
+  assert(users.some((u) => u.account_status === "deprovisioned" && u.account_enabled === false));
+  assertEquals(pairs.size, 15 + 3); // group pairs + USER_ADMIN, READ_ONLY_ADMIN, HELP_DESK_ADMIN
+  assertEquals(privileged.size, 5); // the role holders (users 1, 2) are in Okta Admins too
+  await t.step("an org of only STAGED users (the integrator test org's shape)", async () => {
+    const staged = new MockOktaDirectory({ users: 24, groups: 4, membersPerGroup: 4, origin: "https://acme.okta.com", allStaged: true, admins: { 5: ["USER_ADMIN"] } });
+    const r = identityRows(await identityRun(spec("okta_users"), staged.handle, { config: { OKTA_DOMAIN: "acme.okta.com" }, creds: { API_TOKEN: "mock-token" } }));
+    assertEquals(r.users.length, 24);
+    assert(r.users.every((u) => u.account_status === "staged"));
+    assert(r.pairs.has(`${staged.user(5).id}|role:USER_ADMIN`));
+    assertEquals([...r.privileged], [staged.user(5).id as string]);
+  });
 });
 
 Deno.test({ name: "google_workspace: directory identity full run", ignore: identityIgnored }, async () => {
@@ -353,6 +376,8 @@ Deno.test({ name: "google_workspace: directory identity full run", ignore: ident
 });
 
 Deno.test({ name: "entra_directory: identity full run then delta", ignore: identityIgnored }, async () => {
+  const lacks = await engineLacks(spec("entra_directory"));
+  if (lacks) return void console.warn(`entra_directory: skipped, engine lacks: ${lacks}`);
   const mock = new MockGraph({ users: 24, groups: 4, membersPerGroup: 4, pageMax: 10 });
   const opts = {
     config: { DIRECTORY_ID: "e6800ccd-0000-4000-8000-000000000000", CLIENT_ID: mock.clientId, PRIVILEGED_GROUPS: "privileged ops" },

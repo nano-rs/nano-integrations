@@ -1,9 +1,13 @@
 // Mock Okta Users + Groups APIs for directory sync (NAN-3503). SYNTHETIC DATA ONLY.
 //
 //   GET /api/v1/users           limit (<=200), after; Link rel="next". Without
-//        `search`/`filter` the list omits DEPROVISIONED users, as Okta does.
-//        search=lastUpdated gt "<ISO>" (or ge) returns matching users of
-//        every status, DEPROVISIONED included.
+//        `search`/`filter` the list omits STAGED and DEPROVISIONED users, as
+//        Okta does. search=lastUpdated gt "<ISO>" (or ge) and
+//        search=status eq "A" or status eq "B" ... return matching users of
+//        every status.
+//   GET /api/v1/iam/assignees/users  users holding an admin role: {value:
+//        [{id, orn}], _links: {next: {href}}}; limit (default 100), after
+//   GET /api/v1/users/{id}/roles     [{id, type, label, status, assignmentType}]
 //   GET /api/v1/groups          limit (<=200), after; Link rel="next"
 //   GET /api/v1/groups/{id}/users   limit (<=200), after; Link rel="next"
 //
@@ -28,6 +32,10 @@ export interface OktaDirectoryOptions {
   now?: () => number;
   /** Serve at most this many rows per page whatever `limit` asks. */
   pageMax?: number;
+  /** Admin role types per user index (default: 1 USER_ADMIN, 2 READ_ONLY_ADMIN + HELP_DESK_ADMIN). */
+  admins?: Record<number, string[]>;
+  /** Every user STAGED (created with activate=false), like the integrator test org. */
+  allStaged?: boolean;
 }
 
 export function oktaUser(i: number): Record<string, unknown> {
@@ -73,6 +81,8 @@ export class MockOktaDirectory {
   private origin?: string;
   private now: () => number;
   pageMax: number;
+  readonly admins: Record<number, string[]>;
+  readonly allStaged: boolean;
   readonly groups: { id: string; name: string; members: number[] }[];
 
   constructor(opts: OktaDirectoryOptions = {}) {
@@ -81,6 +91,8 @@ export class MockOktaDirectory {
     this.origin = opts.origin;
     this.now = opts.now ?? Date.now;
     this.pageMax = opts.pageMax ?? 200;
+    this.admins = opts.admins ?? { 1: ["USER_ADMIN"], 2: ["READ_ONLY_ADMIN", "HELP_DESK_ADMIN"] };
+    this.allStaged = opts.allStaged ?? false;
     const per = opts.membersPerGroup ?? 5;
     this.groups = Array.from({ length: opts.groups ?? 3 }, (_, g) => ({
       id: `00gdir${hex(g, 14)}`,
@@ -90,7 +102,15 @@ export class MockOktaDirectory {
   }
 
   user(i: number): Record<string, unknown> {
-    return this.overrides.get(i) ?? oktaUser(i);
+    const o = this.overrides.get(i);
+    if (o) return o;
+    const u = oktaUser(i);
+    if (this.allStaged) {
+      u.status = "STAGED";
+      u.activated = null;
+      u.lastLogin = null;
+    }
+    return u;
   }
 
   /** Change user i at `when` (ISO): status and/or profile fields. */
@@ -150,11 +170,15 @@ export class MockOktaDirectory {
 
     if (url.pathname === "/api/v1/users") {
       const search = q.get("search") ?? q.get("filter");
-      let pred: (u: Record<string, unknown>) => boolean = (u) => u.status !== "DEPROVISIONED";
+      let pred: (u: Record<string, unknown>) => boolean = (u) => u.status !== "DEPROVISIONED" && u.status !== "STAGED";
       // Indexes to scan: everything, or only overrides when the cut is past
       // the generated baseline (keeps a 500k delta query cheap).
       let scan: Iterable<number> | null = null;
-      if (search) {
+      const statuses = search?.split(/ or /).map((c) => c.match(/^status eq "([A-Z_]+)"$/)?.[1]);
+      if (search && statuses && statuses.every((x) => x !== undefined)) {
+        const want = new Set(statuses);
+        pred = (u) => want.has(u.status as string);
+      } else if (search) {
         const m = search.match(/^lastUpdated (gt|ge) "([^"]+)"$/);
         if (!m || Number.isNaN(Date.parse(m[2]))) {
           return reply(json({ errorCode: "E0000031", errorSummary: "Invalid search criteria.", errorCauses: [] }, 400));
@@ -181,6 +205,39 @@ export class MockOktaDirectory {
       }
       count = page.length;
       return reply(json(page, 200, { ...this.rate(500), Link: this.link(origin, url.pathname, q, next) }));
+    }
+    const ur = url.pathname.match(/^\/api\/v1\/users\/([^/]+)\/roles$/);
+    if (ur) {
+      const i = parseInt(ur[1].replace(/^00udir/, ""), 16);
+      if (!(i >= 0 && i < this.n) || ur[1] !== this.user(i).id) {
+        return reply(json({ errorCode: "E0000007", errorSummary: `Not found: Resource not found: ${ur[1]} (User)` }, 404));
+      }
+      const roles = (this.admins[i] ?? []).map((t, k) => ({
+        id: `ra1dir${hex(i, 8)}${hex(k, 2)}`,
+        label: t.split("_").map((w) => w[0] + w.slice(1).toLowerCase()).join(" "),
+        type: t,
+        status: "ACTIVE",
+        created: "2025-01-01T00:00:00.000Z",
+        lastUpdated: OKTA_BASE_UPDATED,
+        assignmentType: "USER",
+      }));
+      count = roles.length;
+      return reply(json(roles, 200, this.rate(500)));
+    }
+    if (url.pathname === "/api/v1/iam/assignees/users") {
+      const lim = Math.min(parseInt(q.get("limit") ?? "100", 10) || 100, 100, this.pageMax);
+      const ids = Object.keys(this.admins).map(Number).filter((i) => (this.admins[i] ?? []).length > 0).sort((a, b) => a - b);
+      const start = q.has("after") ? ids.findIndex((i) => i >= after) : 0;
+      const page = start < 0 ? [] : ids.slice(start, start + lim);
+      count = page.length;
+      const body: Record<string, unknown> = {
+        value: page.map((i) => ({ id: this.user(i).id, orn: `orn:okta:directory:mock:users:${this.user(i).id}`, _links: { self: { href: `${origin}/api/v1/users/${this.user(i).id}` } } })),
+        _links: {},
+      };
+      if (start >= 0 && start + lim < ids.length) {
+        (body._links as Record<string, unknown>).next = { href: `${origin}/api/v1/iam/assignees/users?limit=${lim}&after=${ids[start + lim]}` };
+      }
+      return reply(json(body, 200, this.rate(500)));
     }
     if (url.pathname === "/api/v1/groups") {
       const page = this.groups.slice(after, after + limit);
