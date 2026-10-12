@@ -47,13 +47,12 @@ config_fields:
   - name: CLIENT_ID
     label: API Services app client ID
     field_type: string
-    required: true
+    required: false
     placeholder: "0oa1b2c3d4e5f6g7h8i9"
     help: >-
-      The Client ID of the Okta API Services app you created for nano
-      (Applications → Applications → your app → General → Client
-      Credentials). Hosted nano signs in as this app with a private_key_jwt
-      assertion from nano's pull broker; without it every run fails auth.
+      Required for nano-hosted (API Services app client ID); not used by
+      self-hosted API-token installs. Find it under Applications →
+      Applications → your app → General → Client Credentials.
   - name: PRIVILEGED_GROUPS
     label: Privileged groups
     field_type: string

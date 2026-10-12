@@ -99,11 +99,32 @@ function configNeedsRequired(spec: unknown, text: string): Set<string> {
   return need;
 }
 
-/** Problems for config keys `specText` needs that the manifest leaves optional or undeclared. */
-function requiredConfigProblems(where: string, m: Manifest, specText: string): string[] {
+/**
+ * Config keys a HOSTED spec needs that stay `required: false` in the manifest
+ * because the self-hosted spec never reads them. The manifest format has no
+ * per-spec requirement, so the server enforces these when the hosted spec is
+ * the one selected. Every entry must name that check, and must still be used.
+ */
+const HOSTED_ONLY_CONFIG: Record<string, Record<string, string>> = {
+  okta_users: {
+    CLIENT_ID: "hosted-only (okta_broker_jwt client_id); enforced by the NAN-3503 lane G handler check that requires every non-coalesced config read of the selected hosted spec",
+  },
+};
+
+/**
+ * Problems for config keys `specText` needs that the manifest leaves optional
+ * or undeclared. `allow` (hosted specs only) exempts keys the server enforces
+ * for that spec; an entry the spec no longer needs is itself a problem.
+ */
+function requiredConfigProblems(where: string, m: Manifest, specText: string, allow: Record<string, string> = {}): string[] {
   const required = new Set((m.config_fields ?? []).filter((f) => f.required === true).map((f) => f.name));
-  return [...configNeedsRequired(parse(specText), specText)].filter((k) => !required.has(k))
-    .map((k) => `${where}: spec needs config ${k}, which the manifest does not mark required: true`);
+  const need = configNeedsRequired(parse(specText), specText);
+  return [
+    ...[...need].filter((k) => !required.has(k) && !(k in allow))
+      .map((k) => `${where}: spec needs config ${k}, which the manifest does not mark required: true`),
+    ...Object.keys(allow).filter((k) => !need.has(k) || required.has(k))
+      .map((k) => `${where}: hosted-only allowlist entry ${k} is stale (the spec no longer needs it or the manifest already requires it)`),
+  ];
 }
 
 /** Every `{{config.X}}` / `.config.X` a spec text reads. */
@@ -135,7 +156,7 @@ async function checkHostedTwin(slug: string, where: string, specFile: string, sp
   for (const k of configReads(hostedText)) {
     if (!configs.has(k)) problems.push(`${where}: hosted spec reads config ${k}, which the manifest does not declare`);
   }
-  problems.push(...requiredConfigProblems(`${where}/${hostedFile}`, await manifest(slug), hostedText));
+  problems.push(...requiredConfigProblems(`${where}/${hostedFile}`, await manifest(slug), hostedText, HOSTED_ONLY_CONFIG[slug]));
   return problems;
 }
 
@@ -592,4 +613,21 @@ Deno.test("the required-config check catches an optional field a spec cannot run
     "x: spec needs config CLIENT_ID, which the manifest does not mark required: true",
     "x: spec needs config NEEDED, which the manifest does not mark required: true",
   ]);
+  // A hosted spec may leave a key optional only through a named allowlist entry,
+  // and an entry the spec no longer needs is flagged.
+  assertEquals(requiredConfigProblems("x", m, text, { CLIENT_ID: "handler check", GONE: "handler check" }), [
+    "x: spec needs config NEEDED, which the manifest does not mark required: true",
+    "x: hosted-only allowlist entry GONE is stale (the spec no longer needs it or the manifest already requires it)",
+  ]);
+});
+
+// Every hosted-only allowlist entry belongs to an integration that ships a
+// hosted spec (otherwise the stale check above never sees it) and names its check.
+Deno.test("hosted-only config allowlist entries point at a hosted spec and give a reason", async () => {
+  for (const [slug, keys] of Object.entries(HOSTED_ONLY_CONFIG)) {
+    const m = await manifest(slug);
+    const hosted = m.hosted_connector_spec ?? (m.components ?? []).find((c) => c.hosted_connector_spec)?.hosted_connector_spec;
+    assert(hosted, `${slug}: allowlisted hosted-only config but ships no hosted spec`);
+    for (const [k, why] of Object.entries(keys)) assert(why.trim().length > 0, `${slug}.${k}: allowlist entry needs a reason`);
+  }
 });
