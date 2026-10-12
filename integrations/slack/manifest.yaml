@@ -4,8 +4,13 @@ category: collector
 description: "Pull workspace sign-in records from Slack access logs (needs the `admin` scope — not available on Pro)"
 icon: message-square
 author: nano
-version: 3
+version: 4
 changelog: >-
+  v4: start point-forward (NAN-3697). A new instance now starts at the
+  activation time minus 5 minutes instead of shipping every sign-in record
+  Slack still holds, and the first run pins that start even when it finds
+  nothing. Existing cursors are resumed unchanged. There is no backfill
+  option.
   v3: the access-log stream names the OCSF parser (slack_access_ocsf) instead
   of the pre-OCSF slack_access parser. Parser lookup is by name, and OCSF
   tenants only carry the *_ocsf parsers, so the stream arrived unparsed on OCSF

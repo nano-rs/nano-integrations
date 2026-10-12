@@ -343,11 +343,13 @@ Deno.test({
   const dir = await Deno.makeTempDir({ prefix: "okta-mock-public-" });
   const spec = `${dir}/connector.yaml`;
   await Deno.writeTextFile(spec, mockSpec(shipped, MOCK_HOST));
-  const backfill = new Date(start - 30 * 60_000).toISOString();
+  // The engine clock is pinned to `start`, so the first window opens at the
+  // initial cursor, start − 300 s (NAN-3697).
+  const initialCursor = start - 300_000;
   const opts = {
     config: { OKTA_DOMAIN: MOCK_HOST },
     creds: { API_TOKEN: TOKEN },
-    backfillFrom: backfill,
+    now: new Date(start).toISOString(),
   };
   const uuidsOf = (r: ConnectorRun) =>
     r.batches.flatMap((
@@ -383,10 +385,10 @@ Deno.test({
     "vendor uuid is the ingest id",
   );
 
-  // Gapless from the backfill start up to wherever the run's window closed,
+  // Gapless from the initial cursor up to wherever the run's window closed,
   // and it closed no earlier than the spec's lag (30 s) plus slack.
   const s = new Stream(config(mockEnv));
-  const from = s.firstAtOrAfter(Date.parse(backfill));
+  const from = s.firstAtOrAfter(initialCursor);
   assertEquals(
     one,
     Array.from({ length: one.length }, (_, i) => eventUuid(from + i)),

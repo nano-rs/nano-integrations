@@ -23,6 +23,9 @@ interface CollectorContext {
   credentials: Record<string, string>;
   config: Record<string, string>;
   streams: string[];
+  /** First-run start, ISO-8601: activation time − 5 min, computed by the host (NAN-3697). */
+  initialCursor?: string;
+  /** Deprecated alias of `initialCursor`, carrying the same value. */
   backfillFrom?: string;
   emit(streamId: string, events: unknown[]): Promise<void>;
   checkpoint(streamId: string, cursor: string): Promise<void>;
@@ -172,24 +175,60 @@ function parseCursor(raw: string | undefined): Cursor | null {
   return Number.isNaN(Date.parse(raw)) ? null : { t: raw, seen: [] };
 }
 
-function resumeFrom(ctx: CollectorContext, stream: string): Cursor {
-  const stored = ctx.cursors[stream];
-  const parsed = parseCursor(stored);
-  if (parsed) return parsed;
-  if (stored) {
-    ctx.log("Ignoring unparseable cursor", { stream, value: stored });
-  }
+/**
+ * NAN-3697: every collector starts point-forward. A stream with no cursor
+ * starts at the host's `initialCursor` (activation − 5 min); there is no
+ * backfill option. The same rule lives in the nano-connector engine
+ * (`.initial_cursor`), and this helper is duplicated verbatim in each
+ * single-file collector.
+ */
+export const INITIAL_OVERLAP_MS = 300_000;
 
+/**
+ * Epoch ms a stream with no cursor starts at.
+ *
+ * `initialCursor` wins. `backfillFrom` is read only as the deprecated alias an
+ * older host sends — and clamped, because on such a host it may still be an
+ * operator backfill. With neither, now − INITIAL_OVERLAP_MS. Never earlier
+ * than that, never all-history.
+ */
+export function initialCursorMs(
+  ctx: { initialCursor?: string; backfillFrom?: string; log(msg: string, fields?: Record<string, unknown>): void },
+  now: number = Date.now(),
+): number {
+  const floor = now - INITIAL_OVERLAP_MS;
+  if (ctx.initialCursor) {
+    const parsed = Date.parse(ctx.initialCursor);
+    if (!Number.isNaN(parsed)) return parsed;
+    ctx.log("Ignoring unparseable initialCursor", { value: ctx.initialCursor });
+  }
   if (ctx.backfillFrom) {
-    const from = Date.parse(ctx.backfillFrom);
-    if (!Number.isNaN(from)) return { t: new Date(from).toISOString(), seen: [] };
+    const parsed = Date.parse(ctx.backfillFrom);
+    if (!Number.isNaN(parsed)) return Math.max(parsed, floor);
     ctx.log("Ignoring unparseable backfillFrom", { value: ctx.backfillFrom });
   }
+  return floor;
+}
 
-  // Default to 24h back rather than the retention limit: enough to prove the
-  // integration works on first run without pulling six months of Drive
-  // activity into a tenant that only wanted to try it.
-  return { t: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), seen: [] };
+function resumeFrom(ctx: CollectorContext, stream: string): { cursor: Cursor; resumed: boolean } {
+  const stored = ctx.cursors[stream];
+  const parsed = parseCursor(stored);
+  // An existing valid cursor is always resumed, never reset.
+  if (parsed) return { cursor: parsed, resumed: true };
+
+  const start = new Date(initialCursorMs(ctx)).toISOString();
+  if (stored) {
+    // Loud on purpose: restarting point-forward can skip whatever happened
+    // between the corrupt cursor and now.
+    ctx.log("CURSOR UNREADABLE: restarting this stream at the initial cursor; events since the last good cursor may be missed", {
+      stream,
+      value: stored.slice(0, 200),
+      restartAt: start,
+    });
+  }
+  // No usable cursor: point-forward from the host's initial cursor (NAN-3697),
+  // never a lookback into Workspace's retention.
+  return { cursor: { t: start, seen: [] }, resumed: false };
 }
 
 /**
@@ -297,7 +336,7 @@ async function collectStream(
   ctx: CollectorContext,
   stream: string,
 ): Promise<{ collected: number; drained: boolean }> {
-  const cursor = resumeFrom(ctx, stream);
+  const { cursor, resumed } = resumeFrom(ctx, stream);
   const startTime = cursor.t;
   const startMs = Date.parse(startTime);
   const endTime = cursor.continuation?.endTime;
@@ -450,7 +489,9 @@ async function collectStream(
   // newest record on every poll.
   const advanced = newest > startMs;
   const learned = atNewest.length !== cursor.seen.length;
-  if (cursor.continuation || advanced || learned) {
+  // A fresh stream commits its start even when empty, so the start is pinned
+  // rather than recomputed on every run.
+  if (cursor.continuation || advanced || learned || !resumed) {
     const next: Cursor = { t: new Date(newest).toISOString(), seen: atNewest };
     await ctx.checkpoint(stream, JSON.stringify(next));
   }

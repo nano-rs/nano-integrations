@@ -33,6 +33,9 @@ interface CollectorContext {
   credentials: Record<string, string>;
   config: Record<string, string>;
   streams: string[];
+  /** First-run start, ISO-8601: activation time − 5 min, computed by the host (NAN-3697). */
+  initialCursor?: string;
+  /** Deprecated alias of `initialCursor`, carrying the same value. */
   backfillFrom?: string;
   emit(streamId: string, events: unknown[]): Promise<void>;
   checkpoint(streamId: string, cursor: string): Promise<void>;
@@ -110,19 +113,46 @@ function indexName(config: Record<string, string>, stream: string): string {
 }
 
 /**
- * Where to position a brand-new iterator. `backfillFrom` is the operator's
- * explicit ask; without one we start at now, because opening an iterator at
- * epoch 0 makes Netskope replay the entire retention window on first poll.
+ * NAN-3697: every collector starts point-forward. A stream with no cursor
+ * starts at the host's `initialCursor` (activation − 5 min); there is no
+ * backfill option. The same rule lives in the nano-connector engine
+ * (`.initial_cursor`), and this helper is duplicated verbatim in each
+ * single-file collector.
  */
-function startEpochSeconds(ctx: CollectorContext): number {
+export const INITIAL_OVERLAP_MS = 300_000;
+
+/**
+ * Epoch ms a stream with no cursor starts at.
+ *
+ * `initialCursor` wins. `backfillFrom` is read only as the deprecated alias an
+ * older host sends — and clamped, because on such a host it may still be an
+ * operator backfill. With neither, now − INITIAL_OVERLAP_MS. Never earlier
+ * than that, never all-history.
+ */
+export function initialCursorMs(
+  ctx: { initialCursor?: string; backfillFrom?: string; log(msg: string, fields?: Record<string, unknown>): void },
+  now: number = Date.now(),
+): number {
+  const floor = now - INITIAL_OVERLAP_MS;
+  if (ctx.initialCursor) {
+    const parsed = Date.parse(ctx.initialCursor);
+    if (!Number.isNaN(parsed)) return parsed;
+    ctx.log("Ignoring unparseable initialCursor", { value: ctx.initialCursor });
+  }
   if (ctx.backfillFrom) {
     const parsed = Date.parse(ctx.backfillFrom);
-    if (!Number.isNaN(parsed)) {
-      return Math.floor(parsed / 1000);
-    }
+    if (!Number.isNaN(parsed)) return Math.max(parsed, floor);
     ctx.log("Ignoring unparseable backfillFrom", { value: ctx.backfillFrom });
   }
-  return Math.floor(Date.now() / 1000);
+  return floor;
+}
+
+/**
+ * Where to position a brand-new iterator: the initial cursor (NAN-3697).
+ * Never epoch 0, which makes Netskope replay the entire retention window.
+ */
+function startEpochSeconds(ctx: CollectorContext): number {
+  return Math.floor(initialCursorMs(ctx) / 1000);
 }
 
 /**

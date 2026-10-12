@@ -10,6 +10,11 @@
 // restart from the connector's committed checkpoint ships nothing twice;
 // (3) with NANO_PARSERS_DIR, the stream's OCSF parser gives every event a
 // stable, unique metadata.uid, which is what the lake dedupes on.
+//
+// Both sides start point-forward (NAN-3697): the connector's clock is pinned
+// with `--now` (first-run start = now − 300 s, window horizon = now − lag) and
+// the Deno side gets `initialCursor` = the same now − 300 s. Each mock puts its
+// events inside that five-minute window, short of the longest lag (60 s).
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { parse } from "jsr:@std/yaml@1";
@@ -37,6 +42,12 @@ import {
 } from "./lib.ts";
 
 const root = new URL("../../integrations/", import.meta.url);
+
+/** One pinned clock for both runtimes; see the header. */
+function pinned(): { nowMs: number; now: string; initial_cursor: string } {
+  const nowMs = Date.now();
+  return { nowMs, now: new Date(nowMs).toISOString(), initial_cursor: new Date(nowMs - 300_000).toISOString() };
+}
 const ignore = shadowIgnored();
 const dir = (slug: string) => new URL(`${slug}/`, root);
 const spec = (slug: string) => new URL("connector.yaml", dir(slug)).pathname;
@@ -233,15 +244,16 @@ async function restart(slug: string, handler: Handler, first: ConnectorRun, conn
 }
 
 Deno.test({ name: "okta_system_log: Deno vs connector", ignore }, async () => {
-  const backfill = new Date(Date.now() - 2 * 3600_000).toISOString();
-  // One pinned clock for both mocks, so both serve the same `published` times.
-  const t = Date.now() - 60_000;
+  const clock = pinned();
+  // One pinned clock for both mocks, so both serve the same `published` times:
+  // 2500 events, 1 ms apart, ending 60 s before the pinned now.
+  const t = clock.nowMs - 60_000;
   const mock = () => new MockOkta({ token: "mock-token", events: 2500, users: 450, pageMax: 200, now: () => t, origin: "https://acme.okta.com" }).handle;
-  const connector = { config: { OKTA_DOMAIN: "acme.okta.com" }, creds: { API_TOKEN: "mock-token" }, backfillFrom: backfill };
+  const connector = { config: { OKTA_DOMAIN: "acme.okta.com" }, creds: { API_TOKEN: "mock-token" }, now: clock.now };
   const { run, handler } = await shadow({
     slug: "okta_system_log",
     mock,
-    deno: { credentials: { API_TOKEN: "mock-token" }, config: { OKTA_DOMAIN: "acme.okta.com" }, streams: ["system_log"], backfill_from: backfill },
+    deno: { credentials: { API_TOKEN: "mock-token" }, config: { OKTA_DOMAIN: "acme.okta.com" }, streams: ["system_log"], initial_cursor: clock.initial_cursor },
     connector,
   });
   assertEquals(run.events, 2500);
@@ -250,20 +262,20 @@ Deno.test({ name: "okta_system_log: Deno vs connector", ignore }, async () => {
 
 Deno.test({ name: "google_workspace: Deno vs connector", ignore }, async () => {
   const { pem, publicKey } = await serviceAccountKey();
-  const now = Date.now();
-  const base = now - 10 * 60_000;
+  const clock = pinned();
+  // Newest 70 s before now (past the 60 s lag), oldest 199 s before it.
+  const base = clock.nowMs - 70_000;
   const apps: Record<string, Record<string, unknown>[]> = {};
   for (const [app, n] of [["login", 260], ["admin", 140], ["token", 75]] as const) {
-    // Pairs share an instant (the inclusive-boundary case), 40 s apart.
-    apps[app] = Array.from({ length: n }, (_, i) => gwsEvent(app, i, new Date(base - 40_000 * Math.floor(i / 2))));
+    // Pairs share an instant (the inclusive-boundary case), 1 s apart.
+    apps[app] = Array.from({ length: n }, (_, i) => gwsEvent(app, i, new Date(base - 1_000 * Math.floor(i / 2))));
   }
   const expect = { iss: "svc@mock-project.iam.gserviceaccount.com", sub: "admin@example.com", scope: "https://www.googleapis.com/auth/admin.reports.audit.readonly" };
-  const backfill = new Date(now - 4 * 3600_000).toISOString();
   const connector = {
     config: { ADMIN_EMAIL: "admin@example.com", STREAMS: "login,admin,token" },
     creds: { CLIENT_EMAIL: expect.iss },
     credFiles: { PRIVATE_KEY: pem },
-    backfillFrom: backfill,
+    now: clock.now,
   };
   const { run, handler } = await shadow({
     slug: "google_workspace",
@@ -273,7 +285,7 @@ Deno.test({ name: "google_workspace: Deno vs connector", ignore }, async () => {
       credentials: { PRIVATE_KEY: pem, CLIENT_EMAIL: expect.iss },
       config: { ADMIN_EMAIL: "admin@example.com" },
       streams: ["login", "admin", "token"],
-      backfill_from: backfill,
+      initial_cursor: clock.initial_cursor,
     },
     connector,
   });
@@ -282,32 +294,37 @@ Deno.test({ name: "google_workspace: Deno vs connector", ignore }, async () => {
 });
 
 Deno.test({ name: "slack: Deno vs connector", ignore }, async () => {
-  const t0 = Math.floor(Date.now() / 1000) - 600;
-  const logins = Array.from({ length: 450 }, (_, i) => slackLogin(i, t0 - 60 * i));
-  const connector = { creds: { USER_TOKEN: "xoxp-mock-token" } };
+  const clock = pinned();
+  // Newest 10 s before now, two per second, oldest 234 s before it.
+  const t0 = Math.floor(clock.nowMs / 1000) - 10;
+  const logins = Array.from({ length: 450 }, (_, i) => slackLogin(i, t0 - Math.floor(i / 2)));
+  // Older history the point-forward start must NOT ship.
+  const history = Array.from({ length: 50 }, (_, i) => slackLogin(450 + i, t0 - 3600 - 60 * i));
+  const connector = { creds: { USER_TOKEN: "xoxp-mock-token" }, now: clock.now };
   const { run, handler } = await shadow({
     slug: "slack",
-    mock: () => slackMock(logins, "xoxp-mock-token"),
-    deno: { auth: { type: "bearer", token: "xoxp-mock-token" }, credentials: { USER_TOKEN: "xoxp-mock-token" }, config: {}, streams: ["access_logs"] },
+    mock: () => slackMock([...logins, ...history], "xoxp-mock-token"),
+    deno: { auth: { type: "bearer", token: "xoxp-mock-token" }, credentials: { USER_TOKEN: "xoxp-mock-token" }, config: {}, streams: ["access_logs"], initial_cursor: clock.initial_cursor },
     connector,
   });
   assertEquals(run.events, 450);
   assertEquals((await restart("slack", handler, run, connector)).events, 0);
 });
 
-const netskopeT0 = Math.floor(Date.now() / 1000) - 3600;
-const netskopeBackfill = new Date((netskopeT0 - 60) * 1000).toISOString();
+// Events from 290 s before now, one per second, inside the first-run window.
+const netskopeClock = pinned();
+const netskopeT0 = Math.floor(netskopeClock.nowMs / 1000) - 290;
 const netskopeDeno = (streams: string[]) => ({
   auth: { type: "api_key_header", header_name: "Netskope-API-Token", api_key: "ns-token-123456" },
   credentials: { API_TOKEN: "ns-token-123456" },
   config: { TENANT_HOST: "acme.goskope.com", INDEX_NAME: "nano" },
   streams,
-  backfill_from: netskopeBackfill,
+  initial_cursor: netskopeClock.initial_cursor,
 });
 const netskopeConnector = (streams: string[]) => ({
   config: { TENANT_HOST: "acme.goskope.com", INDEX_NAME: "nano", STREAMS: streams.join(",") },
   creds: { API_TOKEN: "ns-token-123456" },
-  backfillFrom: netskopeBackfill,
+  now: netskopeClock.now,
 });
 
 Deno.test({ name: "netskope: Deno vs connector", ignore }, async () => {

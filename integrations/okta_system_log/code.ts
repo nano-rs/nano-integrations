@@ -123,8 +123,8 @@ export function encodeCursor(c: Cursor): string {
 
 /**
  * Read a stored cursor. Anything unreadable falls back to `startFrom` so a
- * corrupt cursor cannot wedge the stream. When `startFrom` is "now" that can
- * skip events, so `pullSystemLog` logs the fallback.
+ * corrupt cursor cannot wedge the stream. `startFrom` is the initial cursor
+ * (NAN-3697), so that restart can skip events; `pullSystemLog` logs it.
  */
 export function parseCursor(raw: string | undefined, startFrom: string): Cursor {
   if (raw) {
@@ -298,7 +298,7 @@ export async function pullSystemLog(
   };
   let cursor = parseCursor(cursorRaw, opts.startFrom);
   if (cursorRaw && cursor.since === opts.startFrom && !cursor.after) {
-    // Restarting from startFrom (often "now") can skip events, so make it loud.
+    // Restarting from startFrom (the initial cursor) can skip events, so make it loud.
     deps.log("okta cursor unreadable; restarting from the configured start", { start: opts.startFrom });
   }
   let events = 0;
@@ -374,6 +374,9 @@ interface CollectorContext {
   credentials: Record<string, string>;
   config: Record<string, string>;
   streams: string[];
+  /** First-run start, ISO-8601: activation time − 5 min, computed by the host (NAN-3697). */
+  initialCursor?: string;
+  /** Deprecated alias of `initialCursor`, carrying the same value. */
   backfillFrom?: string;
   emit(streamId: string, events: unknown[]): Promise<void>;
   checkpoint(streamId: string, cursor: string): Promise<void>;
@@ -383,12 +386,49 @@ interface CollectorContext {
 
 const STREAM = "system_log";
 
+/**
+ * NAN-3697: every collector starts point-forward. A stream with no cursor
+ * starts at the host's `initialCursor` (activation − 5 min); there is no
+ * backfill option. The same rule lives in the nano-connector engine
+ * (`.initial_cursor`), and this helper is duplicated verbatim in each
+ * single-file collector.
+ */
+export const INITIAL_OVERLAP_MS = 300_000;
+
+/**
+ * Epoch ms a stream with no cursor starts at.
+ *
+ * `initialCursor` wins. `backfillFrom` is read only as the deprecated alias an
+ * older host sends — and clamped, because on such a host it may still be an
+ * operator backfill. With neither, now − INITIAL_OVERLAP_MS. Never earlier
+ * than that, never all-history.
+ */
+export function initialCursorMs(
+  ctx: { initialCursor?: string; backfillFrom?: string; log(msg: string, fields?: Record<string, unknown>): void },
+  now: number = Date.now(),
+): number {
+  const floor = now - INITIAL_OVERLAP_MS;
+  if (ctx.initialCursor) {
+    const parsed = Date.parse(ctx.initialCursor);
+    if (!Number.isNaN(parsed)) return parsed;
+    ctx.log("Ignoring unparseable initialCursor", { value: ctx.initialCursor });
+  }
+  if (ctx.backfillFrom) {
+    const parsed = Date.parse(ctx.backfillFrom);
+    if (!Number.isNaN(parsed)) return Math.max(parsed, floor);
+    ctx.log("Ignoring unparseable backfillFrom", { value: ctx.backfillFrom });
+  }
+  return floor;
+}
+
 async function collect(ctx: CollectorContext): Promise<void> {
   if (!ctx.streams.includes(STREAM)) return;
   const token = (ctx.credentials.API_TOKEN ?? "").trim();
   if (!token) throw new Error("API_TOKEN is not set");
   const baseUrl = baseUrlFromDomain(ctx.config.OKTA_DOMAIN ?? "");
-  const startFrom = ctx.backfillFrom ?? new Date().toISOString();
+  // Point-forward (NAN-3697): no cursor starts at the host's initial cursor.
+  // An existing cursor is resumed by pullSystemLog and never reset.
+  const startFrom = new Date(initialCursorMs(ctx)).toISOString();
 
   const result = await pullSystemLog(
     { baseUrl, token, startFrom },

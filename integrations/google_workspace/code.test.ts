@@ -12,7 +12,7 @@
 //   deno test integrations/google_workspace/code.test.ts
 
 import { assertEquals } from "jsr:@std/assert@1";
-import { collect } from "./code.ts";
+import { collect, INITIAL_OVERLAP_MS } from "./code.ts";
 
 interface Activity {
   id: { time: string; uniqueQualifier?: string; applicationName?: string };
@@ -23,7 +23,10 @@ function activity(time: string, qualifier: string): Activity {
   return { id: { time, uniqueQualifier: qualifier, applicationName: "admin" } };
 }
 
-/** Event times are relative to now, so they land inside the default 24h window. */
+/**
+ * Event times are relative to now. The NAN-2272 cases model a stream the host
+ * activated two hours ago, so they land after its initial cursor.
+ */
 const T0 = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 const T1 = new Date(Date.now() - 30 * 60 * 1000).toISOString();
 
@@ -60,13 +63,21 @@ function stubApi(pages: Record<string, Activity[]>) {
   return { startTimes, restore: () => { globalThis.fetch = original; } };
 }
 
-function makeCtx(cursors: Record<string, string | undefined>) {
+const ACTIVATED_2H_AGO = new Date(Date.now() - 2 * 60 * 60 * 1000 - INITIAL_OVERLAP_MS).toISOString();
+
+function makeCtx(
+  cursors: Record<string, string | undefined>,
+  start: { initialCursor?: string; backfillFrom?: string } = { initialCursor: ACTIVATED_2H_AGO },
+) {
   const emitted: Activity[] = [];
   const checkpoints: string[] = [];
+  const logs: string[] = [];
   return {
     emitted,
     checkpoints,
+    logs,
     ctx: {
+      ...start,
       cursors,
       credentials: {},
       config: {},
@@ -81,7 +92,9 @@ function makeCtx(cursors: Record<string, string | undefined>) {
         return Promise.resolve();
       },
       shouldStop: () => false,
-      log: () => {},
+      log: (msg: string) => {
+        logs.push(msg);
+      },
     },
   };
 }
@@ -196,8 +209,9 @@ Deno.test("a corrupt cursor does not throw the run away", async () => {
     const cursors: Record<string, string | undefined> = { admin: "{not json" };
     const run = makeCtx(cursors);
     await collect(run.ctx as never);
-    // Falls back to the 24h default window and carries on.
+    // Restarts at the initial cursor, loudly, and carries on (NAN-3697).
     assertEquals(run.emitted.length, 1);
+    assertEquals(run.logs.filter((l) => l.startsWith("CURSOR UNREADABLE")).length, 1);
   } finally {
     api.restore();
   }
@@ -350,6 +364,97 @@ Deno.test("a shouldStop truncation drains its backlog across consecutive runs", 
     await collect(run2.ctx as never);
     assertEquals(delivered.size, total, "stopping mid-walk must not strand older pages");
     assertEquals(JSON.parse(cursors.admin as string).continuation, undefined, "the final cursor is v3-compatible");
+  } finally {
+    api.restore();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// NAN-3697: point-forward start, with the clock pinned by stubbing Date.now.
+// The stub records every request's startTime, which is the start under test.
+// ---------------------------------------------------------------------------
+
+const FAKE_NOW_MS = Date.parse("2026-10-12T15:00:00.000Z");
+const isoAt = (ms: number) => new Date(ms).toISOString();
+
+async function atFakeNow(fn: () => Promise<void>): Promise<void> {
+  const real = Date.now;
+  Date.now = () => FAKE_NOW_MS;
+  try {
+    await fn();
+  } finally {
+    Date.now = real;
+  }
+}
+
+Deno.test("NAN-3697 gws: no cursor starts exactly at initialCursor (now - 300 s)", async () => {
+  const api = stubApi({ admin: [activity(isoAt(FAKE_NOW_MS - 3 * 86400_000), "old"), activity(isoAt(FAKE_NOW_MS - 60_000), "new")] });
+  try {
+    await atFakeNow(async () => {
+      const start = isoAt(FAKE_NOW_MS - 300_000);
+      const h = makeCtx({}, { initialCursor: start, backfillFrom: start });
+      await collect(h.ctx as never);
+      assertEquals(api.startTimes[0], start);
+      assertEquals(h.emitted.map((a) => a.id.uniqueQualifier), ["new"]);
+    });
+  } finally {
+    api.restore();
+  }
+});
+
+Deno.test("NAN-3697 gws: an empty first run pins its start as the cursor", async () => {
+  const api = stubApi({ admin: [] });
+  try {
+    await atFakeNow(async () => {
+      const start = isoAt(FAKE_NOW_MS - 300_000);
+      const h = makeCtx({}, { initialCursor: start });
+      await collect(h.ctx as never);
+      assertEquals(h.checkpoints.map((c) => JSON.parse(c).t), [start]);
+    });
+  } finally {
+    api.restore();
+  }
+});
+
+Deno.test("NAN-3697 gws: no initialCursor (old host) still starts at now - 300 s, not 24 h back", async () => {
+  const api = stubApi({ admin: [] });
+  try {
+    await atFakeNow(async () => {
+      const h = makeCtx({}, {});
+      await collect(h.ctx as never);
+      assertEquals(api.startTimes[0], isoAt(FAKE_NOW_MS - 300_000));
+    });
+  } finally {
+    api.restore();
+  }
+});
+
+Deno.test("NAN-3697 gws: initialCursor wins over a far-past backfillFrom; a lone far-past alias is clamped", async () => {
+  const api = stubApi({ admin: [] });
+  try {
+    await atFakeNow(async () => {
+      const farPast = isoAt(FAKE_NOW_MS - 180 * 86400_000);
+      await collect(makeCtx({}, { initialCursor: isoAt(FAKE_NOW_MS - 300_000), backfillFrom: farPast }).ctx as never);
+      await collect(makeCtx({}, { backfillFrom: farPast }).ctx as never);
+      assertEquals(api.startTimes, [isoAt(FAKE_NOW_MS - 300_000), isoAt(FAKE_NOW_MS - 300_000)]);
+    });
+  } finally {
+    api.restore();
+  }
+});
+
+Deno.test("NAN-3697 gws: an existing cursor is resumed, never reset to a later initialCursor", async () => {
+  const older = isoAt(FAKE_NOW_MS - 10 * 86400_000);
+  const api = stubApi({ admin: [activity(isoAt(FAKE_NOW_MS - 5 * 86400_000), "backlog")] });
+  try {
+    await atFakeNow(async () => {
+      const cursors: Record<string, string | undefined> = { admin: JSON.stringify({ t: older, seen: [] }) };
+      const h = makeCtx(cursors, { initialCursor: isoAt(FAKE_NOW_MS - 300_000) });
+      await collect(h.ctx as never);
+      assertEquals(api.startTimes[0], older);
+      assertEquals(h.emitted.map((a) => a.id.uniqueQualifier), ["backlog"]);
+      assertEquals(JSON.parse(cursors.admin as string).t, isoAt(FAKE_NOW_MS - 5 * 86400_000));
+    });
   } finally {
     api.restore();
   }

@@ -4,8 +4,13 @@ category: collector
 description: "Pull login, admin and OAuth-grant audit events from the Google Workspace Reports API"
 icon: shield
 author: nano
-version: 8
+version: 9
 changelog: >-
+  v9: start point-forward (NAN-3697). A new stream now starts at the
+  activation time minus 5 minutes instead of 24 hours back, and the first run
+  pins that start even when it finds nothing. Existing cursors are resumed
+  unchanged; an unreadable cursor restarts at the initial cursor and logs it
+  loudly. There is no backfill option.
   v8: new Directory component (NAN-3503): Workspace users and group
   memberships synced into nano's identity registry from the Admin SDK
   Directory API (directory.connector.yaml, hosted

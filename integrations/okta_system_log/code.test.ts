@@ -12,6 +12,7 @@ import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@
 import {
   collect,
   type Cursor,
+  INITIAL_OVERLAP_MS,
   nextAfter,
   OktaApiError,
   type OktaLogEvent,
@@ -300,7 +301,7 @@ Deno.test("rateLimitWaitMs reads epoch-second resets and Retry-After", () => {
   assertEquals(rateLimitWaitMs(new Headers(), now), 60_000);
 });
 
-Deno.test("collect(): nano adapter wires stream, SSWS header, cursor and backfill", async () => {
+Deno.test("collect(): nano adapter wires stream, SSWS header, cursor and initial cursor", async () => {
   const clock = new Clock();
   clock.t = Date.now();
   const mock = new MockOkta({ events: 1200, now: () => Date.now(), origin: BASE });
@@ -319,7 +320,8 @@ Deno.test("collect(): nano adapter wires stream, SSWS header, cursor and backfil
       credentials: { API_TOKEN: ` ${TOKEN} ` },
       config: { OKTA_DOMAIN: "https://ACME.okta.com/" },
       streams: ["system_log"],
-      backfillFrom: new Date(Date.now() - 3_600_000).toISOString(),
+      // The host's initial cursor for an instance activated an hour ago.
+      initialCursor: new Date(Date.now() - 3_600_000).toISOString(),
       emit: (s, events) => {
         emitted.push([s, events.length]);
         return Promise.resolve();
@@ -406,4 +408,87 @@ Deno.test({
       await server.shutdown();
     }
   },
+});
+
+// ---------------------------------------------------------------------------
+// NAN-3697: point-forward start through the nano adapter, with the clock
+// pinned by stubbing Date.now. The stub records every request URL; the first
+// one's `since` (or `after`) is the start under test.
+// ---------------------------------------------------------------------------
+
+const FAKE_NOW_MS = Date.parse("2026-10-12T15:00:00.000Z");
+const isoAt = (ms: number) => new Date(ms).toISOString();
+
+async function adapterRun(
+  extra: { initialCursor?: string; backfillFrom?: string },
+  cursors: Record<string, string | undefined> = {},
+): Promise<{ urls: URL[]; checkpoints: string[] }> {
+  const urls: URL[] = [];
+  const checkpoints: string[] = [];
+  const realFetch = globalThis.fetch;
+  const realNow = Date.now;
+  globalThis.fetch = ((input: string | URL | Request) => {
+    const u = new URL(String(input));
+    urls.push(u);
+    // An empty polling page: Okta always offers a next link on one.
+    return Promise.resolve(
+      new Response("[]", {
+        status: 200,
+        headers: { "content-type": "application/json", link: `<${BASE}/api/v1/logs?after=next-1>; rel="next"` },
+      }),
+    );
+  }) as typeof fetch;
+  Date.now = () => FAKE_NOW_MS;
+  try {
+    await collect({
+      ...extra,
+      cursors,
+      credentials: { API_TOKEN: TOKEN },
+      config: { OKTA_DOMAIN: "acme.okta.com" },
+      streams: ["system_log"],
+      emit: () => Promise.resolve(),
+      checkpoint: (_s, c) => {
+        checkpoints.push(c);
+        cursors.system_log = c;
+        return Promise.resolve();
+      },
+      shouldStop: () => false,
+      log: () => {},
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+    Date.now = realNow;
+  }
+  return { urls, checkpoints };
+}
+
+Deno.test("NAN-3697 okta: no cursor starts exactly at initialCursor (now - 300 s)", async () => {
+  assertEquals(INITIAL_OVERLAP_MS, 300_000);
+  const start = isoAt(FAKE_NOW_MS - 300_000);
+  const r = await adapterRun({ initialCursor: start, backfillFrom: start });
+  assertEquals(r.urls[0].searchParams.get("since"), start);
+  // The first run commits Okta's resume point even with nothing to ship.
+  assertEquals(JSON.parse(r.checkpoints[0]).since, start);
+});
+
+Deno.test("NAN-3697 okta: no initialCursor (old host) still starts at now - 300 s, not now", async () => {
+  const r = await adapterRun({});
+  assertEquals(r.urls[0].searchParams.get("since"), isoAt(FAKE_NOW_MS - 300_000));
+});
+
+Deno.test("NAN-3697 okta: initialCursor wins over a far-past backfillFrom; a lone far-past alias is clamped", async () => {
+  const farPast = isoAt(FAKE_NOW_MS - 90 * 86400_000);
+  const a = await adapterRun({ initialCursor: isoAt(FAKE_NOW_MS - 300_000), backfillFrom: farPast });
+  const b = await adapterRun({ backfillFrom: farPast });
+  assertEquals(a.urls[0].searchParams.get("since"), isoAt(FAKE_NOW_MS - 300_000));
+  assertEquals(b.urls[0].searchParams.get("since"), isoAt(FAKE_NOW_MS - 300_000));
+});
+
+Deno.test("NAN-3697 okta: an existing cursor is resumed, never reset to a later initialCursor", async () => {
+  const older = isoAt(FAKE_NOW_MS - 30 * 86400_000);
+  const stored: Cursor = { v: 1, since: older, after: "stored-after" };
+  const r = await adapterRun({ initialCursor: isoAt(FAKE_NOW_MS - 300_000) }, { system_log: JSON.stringify(stored) });
+  assertEquals(r.urls[0].searchParams.get("after"), "stored-after");
+  assertEquals(r.urls[0].searchParams.get("since"), older);
+  assert(r.checkpoints.every((c) => JSON.parse(c).since === older), "the stored since is never replaced");
 });

@@ -1,7 +1,9 @@
 # nano-connector spec that replaces code.ts in this directory (NAN-3490). The API is
 # newest-first with no time filter, so VRL stops at the saved watermark and
 # moves it only on the last page (the engine persists state per page; `wm`
-# stays fixed until the walk completes).
+# stays fixed until the walk completes). A stream with no state starts
+# point-forward at `.initial_cursor` (NAN-3697); the first walk persists that
+# start as `wm` even when it ships nothing.
 version: 1
 name: slack_access_logs
 kind: collector
@@ -31,8 +33,13 @@ streams:
         {"error": "Slack returned an error: " + (string(.response.body.error) ?? "unknown")}
       } else {
         wm = to_int(.state.wm) ?? 0
-        if wm == 0 && is_string(.backfill_from) {
-          wm = to_unix_timestamp(parse_timestamp(string!(.backfill_from), "%+") ?? now(), unit: "seconds")
+        if wm == 0 {
+          # No saved watermark: start point-forward at the engine's initial
+          # cursor (NAN-3697). `.backfill_from` is its deprecated alias on older
+          # engines; with neither, now - 300 s. Never 0 / all history.
+          ic = string(.initial_cursor) ?? string(.backfill_from) ?? ""
+          start = parse_timestamp(ic, "%+") ?? from_unix_timestamp(to_unix_timestamp(now(), unit: "seconds") - 300) ?? now()
+          wm = to_unix_timestamp(start, unit: "seconds")
         }
         newest = to_int(.state.newest) ?? 0
         if newest < wm { newest = wm }

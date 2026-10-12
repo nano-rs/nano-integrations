@@ -142,11 +142,34 @@ export { collect };
 | `ctx.config` | Non-secret values for the manifest's `config_fields`. |
 | `ctx.streams` | Stream ids the operator enabled. Collect only these. |
 | `ctx.cursors[streamId]` | Opaque cursor you last checkpointed, or `undefined` on first run. |
-| `ctx.backfillFrom` | ISO-8601 start time for the first run, if the operator asked for a backfill. |
+| `ctx.initialCursor` | ISO-8601 start for a stream with no cursor: activation time − 5 minutes, computed by nano. |
+| `ctx.backfillFrom` | Deprecated alias of `ctx.initialCursor`, carrying the same value. There is no backfill option. |
 | `ctx.emit(streamId, events)` | Ship a batch of raw events. Resolves once nano has durably accepted them. |
 | `ctx.checkpoint(streamId, cursor)` | Persist a cursor. Call **after** the corresponding `emit` resolves. |
 | `ctx.shouldStop()` | `true` when nano wants the run to wind down (run budget exhausted, or shutdown). Poll it in every loop. |
 | `ctx.log(msg, fields?)` | Structured log line, surfaced in the instance's run history. |
+
+### First run: point-forward
+
+Every collector starts point-forward (NAN-3697). A stream with no cursor starts
+at `ctx.initialCursor` (activation − 5 minutes) — never earlier, never "all the
+history the vendor holds". There is no backfill option. An existing cursor is
+always resumed and never reset; a cursor that cannot be read restarts at the
+initial cursor and should log loudly.
+
+Each shipped collector carries the same small helper, `initialCursorMs(ctx)`
+with `INITIAL_OVERLAP_MS = 300_000`: `ctx.initialCursor`, else the deprecated
+`ctx.backfillFrom` clamped to now − 5 minutes, else now − 5 minutes. Copy it
+rather than inventing another default. If a first run ships nothing, checkpoint
+its starting point anyway so the start does not drift run to run.
+
+Declarative specs (`connector.yaml`) get the same value as `.initial_cursor` in
+VRL and `{{initial_cursor}}` in templates (`.backfill_from` /
+`{{backfill_from}}` are deprecated aliases). Window streams need nothing: the
+engine opens the first window at the initial cursor, and
+`initial_lookback_secs` only bounds the tenant checkpoint-reset API. In VRL,
+fall back as `string(.initial_cursor) ?? string(.backfill_from) ?? ""` and then
+to now − 300 s, never to 0.
 
 ### Delivery semantics
 

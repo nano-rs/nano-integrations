@@ -45,4 +45,7 @@ streams:
       max_span_secs: 3600
       lag_secs: 60
       lookback_secs: 600
+      # The first window starts at the engine's initial cursor (activation -
+      # 5 min, NAN-3697) whatever this says; initial_lookback_secs only bounds
+      # the tenant checkpoint-reset API.
       initial_lookback_secs: 86400
