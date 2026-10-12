@@ -420,7 +420,7 @@ const FAKE_NOW_MS = Date.parse("2026-10-12T15:00:00.000Z");
 const isoAt = (ms: number) => new Date(ms).toISOString();
 
 async function adapterRun(
-  extra: { initialCursor?: string; backfillFrom?: string },
+  extra: { initialCursors?: Record<string, string>; initialCursor?: string; backfillFrom?: string },
   cursors: Record<string, string | undefined> = {},
 ): Promise<{ urls: URL[]; checkpoints: string[] }> {
   const urls: URL[] = [];
@@ -491,4 +491,15 @@ Deno.test("NAN-3697 okta: an existing cursor is resumed, never reset to a later 
   assertEquals(r.urls[0].searchParams.get("after"), "stored-after");
   assertEquals(r.urls[0].searchParams.get("since"), older);
   assert(r.checkpoints.every((c) => JSON.parse(c).since === older), "the stored since is never replaced");
+});
+
+Deno.test("NAN-3697 okta: per-stream initialCursors wins over initialCursor", async () => {
+  const own = isoAt(FAKE_NOW_MS - 120_000);
+  const earliest = isoAt(FAKE_NOW_MS - 3_600_000);
+  const r = await adapterRun({ initialCursors: { system_log: own }, initialCursor: earliest, backfillFrom: earliest });
+  assertEquals(r.urls[0].searchParams.get("since"), own);
+  assertEquals(JSON.parse(r.checkpoints[0]).since, own);
+  // An entry for some other stream is not this stream's start.
+  const other = await adapterRun({ initialCursors: { other: own }, initialCursor: earliest });
+  assertEquals(other.urls[0].searchParams.get("since"), earliest);
 });

@@ -4,8 +4,13 @@ category: collector
 description: "Pull events and alerts from a Netskope tenant via the REST API v2 Data Export iterator"
 icon: cloud
 author: nano
-version: 6
+version: 7
 changelog: >-
+  v7: open each new iterator at its own stream's activation (NAN-3697).
+  The collector now reads the host's per-stream initialCursors[stream] first,
+  then initialCursor, then the deprecated backfillFrom alias, so a stream
+  enabled later no longer opens at the earliest stream's start. Older hosts
+  keep working unchanged. Existing iterators are resumed unchanged.
   v6: start point-forward (NAN-3697). A new iterator opens at the activation
   time minus 5 minutes instead of now. Existing iterators are resumed
   unchanged. There is no backfill option.

@@ -4,8 +4,12 @@ category: collector
 description: "Pull workspace sign-in records from Slack access logs (needs the `admin` scope — not available on Pro)"
 icon: message-square
 author: nano
-version: 4
+version: 5
 changelog: >-
+  v5: start each stream at its own activation (NAN-3697). The collector
+  now reads the host's per-stream initialCursors[stream] first, then
+  initialCursor, then the deprecated backfillFrom alias, so older hosts keep
+  working unchanged. Existing cursors are resumed unchanged.
   v4: start point-forward (NAN-3697). A new instance now starts at the
   activation time minus 5 minutes instead of shipping every sign-in record
   Slack still holds, and the first run pins that start even when it finds

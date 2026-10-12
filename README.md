@@ -142,7 +142,8 @@ export { collect };
 | `ctx.config` | Non-secret values for the manifest's `config_fields`. |
 | `ctx.streams` | Stream ids the operator enabled. Collect only these. |
 | `ctx.cursors[streamId]` | Opaque cursor you last checkpointed, or `undefined` on first run. |
-| `ctx.initialCursor` | ISO-8601 start for a stream with no cursor: activation time − 5 minutes, computed by nano. |
+| `ctx.initialCursors[streamId]` | ISO-8601 start for that stream when it has no cursor: the stream's recorded activation − 5 minutes, computed by nano. Absent on older hosts. |
+| `ctx.initialCursor` | ISO-8601 start for a stream with no cursor: the earliest of the per-stream starts (activation time − 5 minutes). |
 | `ctx.backfillFrom` | Deprecated alias of `ctx.initialCursor`, carrying the same value. There is no backfill option. |
 | `ctx.emit(streamId, events)` | Ship a batch of raw events. Resolves once nano has durably accepted them. |
 | `ctx.checkpoint(streamId, cursor)` | Persist a cursor. Call **after** the corresponding `emit` resolves. |
@@ -152,13 +153,15 @@ export { collect };
 ### First run: point-forward
 
 Every collector starts point-forward (NAN-3697). A stream with no cursor starts
-at `ctx.initialCursor` (activation − 5 minutes) — never earlier, never "all the
+at `ctx.initialCursors[streamId]` (that stream's activation − 5 minutes), else
+`ctx.initialCursor` — never earlier, never "all the
 history the vendor holds". There is no backfill option. An existing cursor is
 always resumed and never reset; a cursor that cannot be read restarts at the
 initial cursor and should log loudly.
 
-Each shipped collector carries the same small helper, `initialCursorMs(ctx)`
-with `INITIAL_OVERLAP_MS = 300_000`: `ctx.initialCursor`, else the deprecated
+Each shipped collector carries the same small helper, `initialCursorMs(ctx, stream)`
+with `INITIAL_OVERLAP_MS = 300_000`: `ctx.initialCursors[stream]`, else
+`ctx.initialCursor`, else the deprecated
 `ctx.backfillFrom` clamped to now − 5 minutes, else now − 5 minutes. Copy it
 rather than inventing another default. If a first run ships nothing, checkpoint
 its starting point anyway so the start does not drift run to run.
