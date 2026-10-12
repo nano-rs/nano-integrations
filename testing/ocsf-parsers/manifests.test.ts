@@ -17,6 +17,8 @@ type Manifest = { slug: string; category?: string; streams?: Stream[] };
 type Snapshot = { parsers: { name: string; match_values: string[] }[] };
 
 const ENRICH_LANE = "nano_enrich";
+// NAN-3503: streams of a `kind: identity` spec feed nano's identity snapshot.
+const IDENTITY_LANE = "nano_identity";
 
 const here = new URL(".", import.meta.url);
 const integrations = new URL("../../integrations/", here);
@@ -58,8 +60,8 @@ Deno.test("every collector stream resolves to an OCSF parser", async () => {
       // NAN-3490: nano_enrich records go to the enrichment lane (Vector routes
       // them by `kind` to the identity/ioc/asset normalizers), never to a log
       // parser, so no OCSF parser applies and none may be declared.
-      if (s.source_type === ENRICH_LANE) {
-        if (s.parser !== undefined) problems.push(`${where}: a nano_enrich stream cannot name a log parser`);
+      if (s.source_type === ENRICH_LANE || s.source_type === IDENTITY_LANE) {
+        if (s.parser !== undefined) problems.push(`${where}: a ${s.source_type} stream cannot name a log parser`);
         continue;
       }
       if (s.parser !== undefined) {

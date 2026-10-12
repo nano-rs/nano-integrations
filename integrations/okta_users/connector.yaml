@@ -1,41 +1,140 @@
-# nano-connector spec (NAN-3490): Okta directory users for the identity lane.
-# There is no Deno original. Each run walks /api/v1/users by Okta's own
-# rel="next" links and pushes every user as a nano_enrich identity record
-# (kind=identity, source=okta), the shape the okta_identity normalizer in the
-# parsers repo (enrichments/identity/okta) maps into user_registry. It is the
-# record shape the native Okta identity sync pushes today.
+# nano-connector identity spec (NAN-3503): Okta directory users and group
+# memberships, synced into nano's identity snapshot (kind: identity; no HEC,
+# no parser, no log source). Replaces the v1 nano_enrich collector.
+#
+# users (mode delta): a full run walks GET /api/v1/users by Okta's rel="next"
+#   links and is a complete snapshot (the list endpoint omits DEPROVISIONED
+#   users, so they drop out of it). Between full runs (identity.full_every_secs)
+#   a delta run asks /api/v1/users?search=lastUpdated gt "<cursor>", which DOES
+#   return DEPROVISIONED users, so a deprovisioning lands within one schedule
+#   tick as account_status=deprovisioned, account_enabled=false. The cursor is
+#   the newest lastUpdated seen, minus a five-minute overlap for Okta's search
+#   index lag; replays are idempotent. It only advances when a walk completes.
+# groups: one sub-pull per group (fan-out discovered from /api/v1/groups),
+#   GET /api/v1/groups/{id}/users, emitting {member: <user id>, group: <group
+#   name>, privileged}. Groups named in PRIVILEGED_GROUPS (comma list,
+#   case-insensitive) mark their members privileged.
 version: 1
 name: okta_users
-kind: collector
+kind: identity
 allow:
   - host: "{{config.OKTA_DOMAIN}}"
     host_suffixes: [".okta.com", ".oktapreview.com", ".okta-emea.com", ".okta-gov.com", ".okta.mil"]
-    path_prefixes: ["/api/v1/users"]
+    path_prefixes: ["/api/v1/users", "/api/v1/groups"]
 auth: { type: okta_ssws, credential: API_TOKEN }
-schedule: "0 */6 * * *"
+schedule: "0 * * * *"
+limits: { max_run_secs: 3600, max_pages: 5000, max_requests: 20000 }
 rate_limit: { reset_header: X-Rate-Limit-Reset, remaining_header: X-Rate-Limit-Remaining, remaining_floor: 2 }
+identity:
+  full_every_secs: 86400
 streams:
   - id: users
-    # The enrichment lane, not a log parser: Vector routes nano_enrich records
-    # with kind=identity to the identity normalizers.
-    source_type: nano_enrich
+    identity: { role: users, mode: delta }
+    # No `request`: the program picks the first request from .identity.mode
+    # (list for full, search for delta) and then follows rel="next".
+    program: |
+      mode = string(.identity.mode) ?? "full"
+      domain = string(.config.OKTA_DOMAIN) ?? ""
+      st = object(.state) ?? {}
+      if .response == null {
+        since = string(st.last_updated) ?? ""
+        if mode == "delta" && since != "" {
+          ts = parse_timestamp(since, "%+") ?? now()
+          since = format_timestamp!(from_unix_timestamp!(to_unix_timestamp(ts) - 300), "%Y-%m-%dT%H:%M:%S.000Z")
+          {"state": st, "next_request": {"url": "https://" + domain + "/api/v1/users", "query": {"limit": "200", "search": "lastUpdated gt \"" + since + "\""}}}
+        } else if mode == "delta" {
+          {"restart_full": true}
+        } else {
+          {"state": {"last_updated": "", "seen_max": ""}, "next_request": {"url": "https://" + domain + "/api/v1/users", "query": {"limit": "200"}}}
+        }
+      } else {
+        status = to_int(.response.status) ?? 0
+        if status < 200 || status >= 300 {
+          {"error": "Okta returned " + to_string(status) + ": " + (string(.response.body.errorSummary) ?? "no summary")}
+        } else {
+          users = array(.response.body) ?? []
+          seen = string(st.seen_max) ?? ""
+          evs = map_values(users) -> |u| {
+            lu = string(u.lastUpdated) ?? ""
+            if lu > seen { seen = lu }
+            p = u.profile
+            s = upcase(string(u.status) ?? "")
+            acct = "unknown"
+            if s == "ACTIVE" || s == "RECOVERY" || s == "PASSWORD_EXPIRED" { acct = "active" }
+            if s == "SUSPENDED" { acct = "suspended" }
+            if s == "DEPROVISIONED" { acct = "deprovisioned" }
+            if s == "LOCKED_OUT" { acct = "locked" }
+            if s == "STAGED" || s == "PROVISIONED" { acct = "staged" }
+            mid = string(p.managerId) ?? ""
+            mgr_upn = if contains(mid, "@") { mid } else { "" }
+            display = string(p.displayName) ?? ""
+            if display == "" { display = strip_whitespace((string(p.firstName) ?? "") + " " + (string(p.lastName) ?? "")) }
+            phone = string(p.mobilePhone) ?? ""
+            if phone == "" { phone = string(p.primaryPhone) ?? "" }
+            compact({
+              "external_id": u.id,
+              "username": p.login,
+              "upn": p.login,
+              "email": p.email,
+              "display_name": display,
+              "first_name": p.firstName,
+              "last_name": p.lastName,
+              "department": p.department,
+              "title": p.title,
+              "manager_upn": mgr_upn,
+              "manager_display_name": p.manager,
+              "company": p.organization,
+              "city": p.city,
+              "country": p.countryCode,
+              "phone": phone,
+              "employee_id": p.employeeNumber,
+              "employee_type": p.userType,
+              "account_enabled": acct == "active",
+              "account_status": acct,
+              "last_sign_in_at": u.lastLogin,
+              "created_in_directory_at": u.created
+            })
+          }
+          next = string(.response.links.next) ?? ""
+          if next == "" {
+            prev = string(st.last_updated) ?? ""
+            done = if seen > prev { seen } else { prev }
+            {"events": evs, "state": {"last_updated": done, "seen_max": ""}}
+          } else {
+            {"events": evs, "state": {"last_updated": st.last_updated, "seen_max": seen}, "next_request": {"url": next}}
+          }
+        }
+      }
+  - id: groups
+    identity: { role: memberships }
+    fanout:
+      discover:
+        from: request
+        request:
+          url: "https://{{config.OKTA_DOMAIN}}/api/v1/groups"
+          query: { limit: "200" }
+          headers: { Accept: application/json }
+        pagination: { type: link_header }
+      item_key: id
+      concurrency: 2
+      max_items: 10000
     request:
-      url: "https://{{config.OKTA_DOMAIN}}/api/v1/users"
+      url: "https://{{config.OKTA_DOMAIN}}/api/v1/groups/{{item.id}}/users"
       query: { limit: "200" }
       headers: { Accept: application/json }
-    # A directory snapshot re-ships every user each run. lastUpdated is the
-    # version: an unchanged user keeps its id (a duplicate downstream), a
-    # changed user gets a new one.
-    ingest_id: { fields: [id, lastUpdated] }
     program: |
       status = to_int(.response.status) ?? 0
       if status < 200 || status >= 300 {
-        {"error": "Okta returned " + to_string(status) + ": " + (string(.response.body.errorSummary) ?? "no summary")}
+        {"error": "Okta group members returned " + to_string(status) + ": " + (string(.response.body.errorSummary) ?? "no summary")}
       } else {
-        users = if is_array(.response.body) { array!(.response.body) } else { [] }
-        evs = map_values(users) -> |u| {
-          merge(object(u) ?? {}, {"kind": "identity", "source": "okta", "provider_id": "okta_users"})
+        group = string(.item.profile.name) ?? (string(.item.id) ?? "")
+        privs = []
+        for_each(split(downcase(string(.config.PRIVILEGED_GROUPS) ?? ""), ",")) -> |_i, p| {
+          p = strip_whitespace(p)
+          if p != "" { privs = push(privs, p) }
         }
+        privileged = includes(privs, downcase(group))
+        evs = map_values(array(.response.body) ?? []) -> |u| { {"member": u.id, "group": group, "privileged": privileged} }
         next = string(.response.links.next) ?? ""
         if next == "" {
           {"events": evs}

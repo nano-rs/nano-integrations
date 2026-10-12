@@ -15,9 +15,13 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import { parse } from "jsr:@std/yaml@1";
 import { MockOkta } from "../okta-mock/mock.ts";
 import { MockNetskope } from "../netskope-mock/mock.ts";
+import { MockGoogleDirectory } from "../directory-mocks/google.ts";
+import { MockGraph } from "../directory-mocks/graph.ts";
+import { MockOktaDirectory } from "../directory-mocks/okta.ts";
 import { gwsEvent, gwsMock, serviceAccountKey, slackLogin, slackMock } from "./mocks.ts";
 import {
   assertIngestIds,
+  connectorBin,
   assertSame,
   bySourceType,
   checkUids,
@@ -39,6 +43,17 @@ const spec = (slug: string) => new URL("connector.yaml", dir(slug)).pathname;
 const script = (slug: string) => new URL("code.ts", dir(slug)).href;
 
 type Stream = { id: string; source_type: string; parser?: string };
+type Component = {
+  id: string;
+  label?: string;
+  kind: string;
+  streams?: string[];
+  connector_spec?: string;
+  hosted_connector_spec?: string;
+  config_fields?: string[];
+  default?: boolean;
+  setup?: { scopes?: string[]; permissions?: string[]; steps?: string[] };
+};
 type Manifest = {
   slug: string;
   runtime?: string;
@@ -47,7 +62,61 @@ type Manifest = {
   credential_fields?: { name: string }[];
   config_fields?: { name: string }[];
   streams?: Stream[];
+  categories?: string[];
+  components?: Component[];
 };
+type SpecStream = { id: string; source_type?: string; fanout?: unknown; identity?: { role?: string; mode?: string } };
+type Spec = { kind?: string; auth?: Record<string, string>; streams: SpecStream[] };
+
+/** NAN-3503: identity streams feed nano's identity snapshot, never ingest. */
+const IDENTITY_LANE = "nano_identity";
+
+/** Every `{{config.X}}` / `.config.X` a spec text reads. */
+const configReads = (text: string) => [...text.matchAll(/(?:\{\{\s*config\.|\.config\.)([A-Z0-9_]+)/g)].map((m) => m[1]);
+
+/**
+ * A hosted twin (NAN-3490) may differ from its spec ONLY in the auth block,
+ * so a run of the self-hosted spec covers what the hosted one collects.
+ * Returns problems; `where` prefixes them.
+ */
+async function checkHostedTwin(slug: string, where: string, specFile: string, spec: Record<string, unknown>, hostedFile: string, creds: Set<string>, configs: Set<string>): Promise<string[]> {
+  const problems: string[] = [];
+  let hostedText = "";
+  try {
+    hostedText = await Deno.readTextFile(new URL(hostedFile, dir(slug)));
+  } catch {
+    return [`${where}: hosted spec ${hostedFile} is missing`];
+  }
+  const { auth: _a, ...rest } = spec;
+  const { auth: hostedAuth, ...hostedRest } = parse(hostedText) as Record<string, unknown>;
+  try {
+    assertEquals(hostedRest, rest);
+  } catch {
+    problems.push(`${where}: ${hostedFile} differs from ${specFile} outside auth`);
+  }
+  for (const [k, v] of Object.entries((hostedAuth ?? {}) as Record<string, string>)) {
+    if ((k === "credential" || k.endsWith("_credential")) && !creds.has(v)) problems.push(`${where}: hosted auth uses credential ${v}, which the manifest does not declare`);
+  }
+  for (const k of configReads(hostedText)) {
+    if (!configs.has(k)) problems.push(`${where}: hosted spec reads config ${k}, which the manifest does not declare`);
+  }
+  return problems;
+}
+
+/** Structural checks every `kind: identity` spec must pass. */
+function checkIdentitySpec(where: string, s: Spec): string[] {
+  const problems: string[] = [];
+  if (s.kind !== "identity") problems.push(`${where}: kind must be identity`);
+  if (!s.streams.some((x) => x.identity?.role === "users")) problems.push(`${where}: no users stream`);
+  for (const st of s.streams) {
+    const role = st.identity?.role;
+    if (role !== "users" && role !== "memberships") problems.push(`${where}/${st.id}: identity.role must be users or memberships`);
+    if (role === "users" && !["full", "delta", undefined].includes(st.identity?.mode)) problems.push(`${where}/${st.id}: identity.mode must be full or delta`);
+    if (role === "memberships" && st.identity?.mode !== undefined) problems.push(`${where}/${st.id}: memberships streams are always full`);
+    if (st.source_type !== undefined) problems.push(`${where}/${st.id}: identity streams have no source_type`);
+  }
+  return problems;
+}
 const manifest = async (slug: string) => parse(await Deno.readTextFile(new URL("manifest.yaml", dir(slug)))) as Manifest;
 
 /** OCSF parser per source_type, from the manifest or the parser snapshot. */
@@ -218,17 +287,88 @@ Deno.test({ name: "netskope: a page lost after it was served is resent by both",
   }
 });
 
-Deno.test({ name: "okta_users: connector only (no Deno original)", ignore }, async () => {
-  const b = serveMock(new MockOkta({ token: "mock-token", events: 0, users: 450, origin: "https://acme.okta.com" }).handle);
+// NAN-3503 identity specs: users rows and membership events against the
+// directory mocks. They need an engine with `kind: identity` (lane A); a
+// binary that predates it skips them with a warning, even in CI, so this repo
+// can land the specs before the engine.
+const identityIgnored = ignore || await (async () => {
+  const out = await new Deno.Command(connectorBin, { args: ["schema"], stdout: "piped", stderr: "null" }).output();
+  const ok = new TextDecoder().decode(out.stdout).includes('"identity"');
+  if (!ok) console.warn("shadow: nano-connector has no kind: identity yet; skipping the identity spec runs");
+  return !ok;
+})();
+
+/** Split an identity run into user rows and (member, group) pairs. Accepts the
+ *  engine's per-event memberships or rows already aggregated into `groups`. */
+function identityRows(run: ConnectorRun): { users: Record<string, Json>[]; pairs: Set<string>; privileged: Set<string> } {
+  const users: Record<string, Json>[] = [];
+  const pairs = new Set<string>();
+  const privileged = new Set<string>();
+  for (const [, evs] of run.batches) {
+    for (const e of evs) {
+      if (typeof e.member === "string") {
+        pairs.add(`${e.member}|${e.group}`);
+        if (e.privileged === true) privileged.add(e.member);
+      } else if (Array.isArray(e.groups)) {
+        for (const g of e.groups) pairs.add(`${e.external_id}|${g}`);
+        if (e.is_admin === true) privileged.add(e.external_id as string);
+      } else users.push(e);
+    }
+  }
+  return { users, pairs, privileged };
+}
+
+async function identityRun(specFile: string, handler: Handler, opts: Parameters<typeof runConnector>[2]) {
+  const b = serveMock(handler);
   try {
-    const run = await runConnector(spec("okta_users"), b, { config: { OKTA_DOMAIN: "acme.okta.com" }, creds: { API_TOKEN: "mock-token" } });
-    const users = bySourceType(run).get("nano_enrich") ?? [];
-    assertEquals(users.length, 450);
-    assertIngestIds("okta_users", users);
-    assert(users.every((u) => u.kind === "identity" && u.source === "okta"), "identity-lane records");
+    return await runConnector(specFile, b, opts);
   } finally {
     await b.close();
   }
+}
+
+Deno.test({ name: "okta_users: identity full run (users + groups)", ignore: identityIgnored }, async () => {
+  const mock = new MockOktaDirectory({ users: 450, groups: 3, membersPerGroup: 5, origin: "https://acme.okta.com" });
+  const run = await identityRun(spec("okta_users"), mock.handle, { config: { OKTA_DOMAIN: "acme.okta.com", PRIVILEGED_GROUPS: "okta admins" }, creds: { API_TOKEN: "mock-token" } });
+  const { users, pairs, privileged } = identityRows(run);
+  assertEquals(users.length, 450 - 20); // the list omits every 23rd (DEPROVISIONED)
+  assert(users.every((u) => typeof u.external_id === "string" && u.account_status !== undefined));
+  assertEquals(pairs.size, 15);
+  assertEquals(privileged.size, 5);
+});
+
+Deno.test({ name: "google_workspace: directory identity full run", ignore: identityIgnored }, async () => {
+  const { pem } = await serviceAccountKey();
+  const mock = new MockGoogleDirectory({ users: 120, groups: 3, membersPerGroup: 5, pageMax: 50 });
+  const run = await identityRun(new URL("directory.connector.yaml", dir("google_workspace")).pathname, mock.handle, {
+    config: { ADMIN_EMAIL: "admin@example.com", PRIVILEGED_GROUPS: "admins@example.com" },
+    creds: { CLIENT_EMAIL: "svc@mock-project.iam.gserviceaccount.com" },
+    credFiles: { PRIVATE_KEY: pem },
+  });
+  const { users, pairs, privileged } = identityRows(run);
+  assertEquals(users.length, 120);
+  assertEquals(pairs.size, 20); // admins@ flattens group 1 (derived membership)
+  assertEquals(privileged.size, 10);
+  assertEquals(mock.grants[0]?.scope, "https://www.googleapis.com/auth/admin.directory.user.readonly https://www.googleapis.com/auth/admin.directory.group.readonly");
+});
+
+Deno.test({ name: "entra_directory: identity full run then delta", ignore: identityIgnored }, async () => {
+  const mock = new MockGraph({ users: 24, groups: 4, membersPerGroup: 4, pageMax: 10 });
+  const opts = {
+    config: { DIRECTORY_ID: "e6800ccd-0000-4000-8000-000000000000", CLIENT_ID: mock.clientId, PRIVILEGED_GROUPS: "privileged ops" },
+    creds: { CLIENT_SECRET: mock.clientSecret },
+  };
+  const full = await identityRun(spec("entra_directory"), mock.handle, opts);
+  const f = identityRows(full);
+  assertEquals(f.users.length, 24);
+  assert(f.users.some((u) => u.employee_type === "guest"));
+  assertEquals(f.pairs.size, 4 * 4 + 4 + 2); // groups (0 nests 1) + two role holders
+  mock.updateUser(3, { department: "Security" });
+  mock.removeUser(5);
+  const delta = await identityRun(spec("entra_directory"), mock.handle, { ...opts, checkpoints: full.checkpoints });
+  const d = identityRows(delta);
+  assertEquals(d.users.map((u) => u.external_id).sort(), [mock.users[3].id, mock.users[5].id].sort());
+  assert(d.users.some((u) => u.deleted === true));
 });
 
 // Runs without the connector binary: the manifest <-> spec contract.
@@ -260,45 +400,113 @@ Deno.test("every connector.yaml is declared by its manifest and only uses declar
     // is filled by nano from the operator's enabled streams (fan-out specs).
     const configs = new Set([...(m.config_fields ?? []).map((f) => f.name), "STREAMS"]);
     const creds = new Set((m.credential_fields ?? []).map((f) => f.name));
-    for (const [, k] of text.matchAll(/(?:\{\{\s*config\.|\.config\.)([A-Z0-9_]+)/g)) {
+    for (const k of configReads(text)) {
       if (!configs.has(k)) problems.push(`${where}: spec reads config ${k}, which the manifest does not declare`);
     }
-    const s = parse(text) as { auth?: Record<string, string>; streams: { source_type?: string; fanout?: unknown }[] };
+    const s = parse(text) as Spec;
     for (const [k, v] of Object.entries(s.auth ?? {})) {
       if ((k === "credential" || k.endsWith("_credential")) && !creds.has(v)) problems.push(`${where}: auth uses credential ${v}, which the manifest does not declare`);
     }
-    // Every manifest stream maps to a spec stream's source_type.
-    for (const ms of m.streams ?? []) {
-      const ok = s.streams.some((ss) => ss.source_type === ms.source_type || (ss.fanout !== undefined && ss.source_type?.replace("{{item}}", ms.id) === ms.source_type));
-      if (!ok) problems.push(`${where}/${ms.id}: no spec stream emits source_type ${ms.source_type}`);
+    if (s.kind === "identity") {
+      // NAN-3503: manifest streams mirror the identity spec's stream ids.
+      problems.push(...checkIdentitySpec(`${where}/connector.yaml`, s));
+      for (const ms of m.streams ?? []) {
+        if (ms.source_type !== IDENTITY_LANE) problems.push(`${where}/${ms.id}: identity streams use source_type ${IDENTITY_LANE}`);
+        if (!s.streams.some((ss) => ss.id === ms.id)) problems.push(`${where}/${ms.id}: no identity spec stream has this id`);
+      }
+    } else {
+      // Every manifest stream maps to a spec stream's source_type.
+      for (const ms of m.streams ?? []) {
+        const ok = s.streams.some((ss) => ss.source_type === ms.source_type || (ss.fanout !== undefined && ss.source_type?.replace("{{item}}", ms.id) === ms.source_type));
+        if (!ok) problems.push(`${where}/${ms.id}: no spec stream emits source_type ${ms.source_type}`);
+      }
     }
     // A hosted-only spec (NAN-3490) may differ from connector.yaml ONLY in its
     // auth block, so the shadow run of connector.yaml covers what it collects.
     if (m.hosted_connector_spec !== undefined) {
       if (m.hosted_connector_spec !== "connector.hosted.yaml") problems.push(`${where}: hosted_connector_spec is not connector.hosted.yaml`);
-      let hostedText = "";
-      try {
-        hostedText = await Deno.readTextFile(new URL(m.hosted_connector_spec, dir(e.name)));
-      } catch {
-        problems.push(`${where}: hosted_connector_spec ${m.hosted_connector_spec} is missing`);
-      }
-      if (hostedText) {
-        const { auth: _a, ...rest } = s as Record<string, unknown>;
-        const { auth: hostedAuth, ...hostedRest } = parse(hostedText) as Record<string, unknown>;
-        try {
-          assertEquals(hostedRest, rest);
-        } catch {
-          problems.push(`${where}: connector.hosted.yaml differs from connector.yaml outside auth`);
-        }
-        for (const [k, v] of Object.entries((hostedAuth ?? {}) as Record<string, string>)) {
-          if ((k === "credential" || k.endsWith("_credential")) && !creds.has(v)) problems.push(`${where}: hosted auth uses credential ${v}, which the manifest does not declare`);
-        }
-        for (const [, k] of hostedText.matchAll(/(?:\{\{\s*config\.|\.config\.)([A-Z0-9_]+)/g)) {
-          if (!configs.has(k)) problems.push(`${where}: hosted spec reads config ${k}, which the manifest does not declare`);
-        }
-      }
+      problems.push(...await checkHostedTwin(e.name, where, "connector.yaml", s as unknown as Record<string, unknown>, m.hosted_connector_spec, creds, configs));
     }
   }
   assert(n >= 5, `only ${n} connector specs found`);
+  assertEquals(problems, []);
+});
+
+// NAN-3503: marketplace components. Runs without the connector binary.
+Deno.test("every manifest component is well-formed and its identity specs are declared", async () => {
+  const problems: string[] = [];
+  let identity = 0;
+  for await (const e of Deno.readDir(root)) {
+    if (!e.isDirectory) continue;
+    let m: Manifest;
+    try {
+      m = await manifest(e.name);
+    } catch (err) {
+      if (err instanceof Deno.errors.NotFound) continue;
+      throw err;
+    }
+    const where = e.name;
+    for (const c of m.categories ?? []) {
+      if (c !== "logs" && c !== "identity") problems.push(`${where}: unknown category ${c}`);
+    }
+    if (m.components === undefined) continue;
+    const configs = new Set([...(m.config_fields ?? []).map((f) => f.name), "STREAMS"]);
+    const creds = new Set((m.credential_fields ?? []).map((f) => f.name));
+    const streamIds = new Set((m.streams ?? []).map((s) => s.id));
+    const claimed = new Map<string, string>();
+    const ids = new Set<string>();
+    for (const c of m.components) {
+      const cw = `${where}/components/${c.id}`;
+      if (!/^[a-z0-9_]+$/.test(c.id ?? "")) problems.push(`${cw}: id must be [a-z0-9_]+`);
+      if (ids.has(c.id)) problems.push(`${cw}: duplicate id`);
+      ids.add(c.id);
+      if (!c.label) problems.push(`${cw}: label is required`);
+      for (const k of ["scopes", "permissions", "steps"] as const) {
+        const v = c.setup?.[k];
+        if (v !== undefined && !(Array.isArray(v) && v.every((x) => typeof x === "string"))) problems.push(`${cw}: setup.${k} must be a list of strings`);
+      }
+      for (const f of c.config_fields ?? []) if (!configs.has(f)) problems.push(`${cw}: config field ${f} is not declared`);
+      if (c.kind === "logs") {
+        if (!c.streams?.length) problems.push(`${cw}: a logs component lists its streams`);
+        for (const sid of c.streams ?? []) {
+          if (!streamIds.has(sid)) problems.push(`${cw}: unknown stream ${sid}`);
+          if (claimed.has(sid)) problems.push(`${cw}: stream ${sid} is already in component ${claimed.get(sid)}`);
+          claimed.set(sid, c.id);
+        }
+      } else if (c.kind === "identity") {
+        identity++;
+        if (!(m.categories ?? []).includes("identity")) problems.push(`${where}: has an identity component but categories lacks identity`);
+        if (!c.connector_spec || c.connector_spec.includes("/")) {
+          problems.push(`${cw}: connector_spec must name a file next to the manifest`);
+          continue;
+        }
+        let text: string;
+        try {
+          text = await Deno.readTextFile(new URL(c.connector_spec, dir(e.name)));
+        } catch {
+          problems.push(`${cw}: ${c.connector_spec} is missing`);
+          continue;
+        }
+        const s = parse(text) as Spec;
+        problems.push(...checkIdentitySpec(`${cw}/${c.connector_spec}`, s));
+        const allowed = c.config_fields ? new Set(c.config_fields) : configs;
+        for (const k of configReads(text)) {
+          if (!configs.has(k)) problems.push(`${cw}: spec reads config ${k}, which the manifest does not declare`);
+          else if (!allowed.has(k)) problems.push(`${cw}: spec reads config ${k}, which the component's config_fields omit`);
+        }
+        for (const [k, v] of Object.entries(s.auth ?? {})) {
+          if ((k === "credential" || k.endsWith("_credential")) && !creds.has(v)) problems.push(`${cw}: auth uses credential ${v}, which the manifest does not declare`);
+        }
+        if (c.hosted_connector_spec !== undefined) {
+          problems.push(...await checkHostedTwin(e.name, cw, c.connector_spec, s as unknown as Record<string, unknown>, c.hosted_connector_spec, creds, configs));
+        }
+        // An entry that IS a directory: its own spec is the component's.
+        if (m.connector_spec === c.connector_spec && m.hosted_connector_spec !== c.hosted_connector_spec) {
+          problems.push(`${cw}: hosted_connector_spec must match the manifest's for its own spec`);
+        }
+      } else problems.push(`${cw}: kind must be logs or identity`);
+    }
+  }
+  assert(identity >= 3, `only ${identity} identity components found`);
   assertEquals(problems, []);
 });

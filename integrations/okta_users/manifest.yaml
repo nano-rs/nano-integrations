@@ -1,11 +1,19 @@
 name: Okta Users
 slug: okta_users
 category: collector
-description: "Sync Okta directory users into nano's identity registry"
+description: "Sync Okta users and group memberships into nano's identity registry"
 icon: users
 author: nano
-version: 1
+version: 2
 changelog: >-
+  v2: identity connector (NAN-3503). Users and group memberships now go
+  straight to nano's identity snapshot (kind: identity) instead of the
+  nano_enrich lane: a full snapshot daily, so removed users drop out, and an
+  hourly delta (search on lastUpdated) in between, so a deprovisioning shows up
+  within the hour as account_status=deprovisioned. New groups stream: each
+  user's Okta groups, with PRIVILEGED_GROUPS marking admin groups. The API
+  token needs read access to groups as well as users (a Read-only
+  Administrator token already has it).
   v1: initial release, on the nano-connector runtime (no Deno script). Walks
   /api/v1/users every six hours and pushes each user to the identity lane,
   where the okta_identity normalizer maps it into the user registry.
@@ -19,7 +27,7 @@ credential_fields:
     help: >-
       Okta Admin Console → Security → API → Tokens → Create token, as a
       Read-only Administrator. Okta expires a token that goes unused for 30
-      days; the six-hourly sync keeps it alive.
+      days; the hourly sync keeps it alive.
 
 config_fields:
   - name: OKTA_DOMAIN
@@ -30,6 +38,14 @@ config_fields:
     help: >-
       Your Okta org hostname, without https:// or a path. Use the org domain
       (acme.okta.com), not a custom sign-in domain.
+  - name: PRIVILEGED_GROUPS
+    label: Privileged groups
+    field_type: string
+    required: false
+    placeholder: "Okta Admins, Break Glass"
+    help: >-
+      Optional. Comma-separated Okta group names whose members nano treats as
+      administrators.
 
 allowed_domain_suffixes:
   - ".okta.com"
@@ -38,24 +54,49 @@ allowed_domain_suffixes:
   - ".okta-gov.com"
   - ".okta.mil"
 
+# Identity streams: their rows go to nano's identity snapshot, not to ingest,
+# so `nano_identity` marks them (no parser, no log source).
 streams:
   - id: users
     label: Directory users
-    # Identity lane, not a log stream: Vector routes nano_enrich records with
-    # kind=identity to the identity normalizers, so no OCSF parser applies.
-    source_type: nano_enrich
+    source_type: nano_identity
     default: true
-    description: "Every Okta user with profile and status, refreshed every six hours"
+    description: "Every Okta user with profile and status: full daily, changes hourly"
+  - id: groups
+    label: Group memberships
+    source_type: nano_identity
+    default: true
+    description: "Which Okta groups each user belongs to"
 
 config:
-  poll_schedule: "0 */6 * * *"
-  max_run_secs: 600
+  poll_schedule: "0 * * * *"
+  max_run_secs: 3600
   max_events_per_emit: 1000
 
 tags:
   - identity
   - okta
 
-# NAN-3490: this integration exists only as a nano-connector spec.
+categories:
+  - identity
+
+components:
+  - id: directory
+    label: Directory
+    kind: identity
+    description: "Users, status changes and group memberships from the Okta Users and Groups APIs"
+    connector_spec: connector.yaml
+    config_fields: [OKTA_DOMAIN, PRIVILEGED_GROUPS]
+    default: true
+    setup:
+      permissions:
+        - "Okta API token created by a Read-only Administrator (reads users and groups)"
+      steps:
+        - "Sign in to the Okta Admin Console as a **Read-only Administrator** (create a dedicated service user with that role if you can)."
+        - "Open **Security → API → Tokens → Create token**, name it `nano directory sync`, and paste the token into API token."
+        - "Enter your Okta org domain (for example `acme.okta.com`), not a custom sign-in domain."
+        - "Okta expires a token that goes unused for 30 days; the hourly sync keeps it alive."
+
+# NAN-3490 / NAN-3503: this integration exists only as a nano-connector spec.
 runtime: connector
 connector_spec: connector.yaml

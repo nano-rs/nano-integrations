@@ -151,3 +151,25 @@ deno test --allow-read testing/ocsf-parsers/manifests.test.ts
 # refresh the snapshot from a parsers checkout on origin/ocsf-1.9
 deno run --allow-read --allow-write --allow-run=git testing/ocsf-parsers/refresh.ts ../parsers
 ```
+
+## `directory-mocks`
+
+Vendor mocks for the NAN-3503 identity specs (`kind: identity`): Google
+Directory (`google.ts`: users with projection=full, groups, members with
+includeDerivedMembership), Microsoft Graph (`graph.ts`: users with
+`$expand=manager` and its 100-row page cap, users/delta with
+`$deltatoken=latest`, `@removed`, `manager@delta`, 410 / syncStateNotFound
+expiry, groups, transitiveMembers, directoryRoles) and Okta (`okta.ts`: users
+generated lazily so 500k costs nothing, Link paging, `search=lastUpdated gt`,
+429 with Retry-After, 401 on a bad token, group members). Each has a
+`faults.throttle(n)` switch and runs standalone (`deno run --allow-net
+testing/directory-mocks/okta.ts`).
+
+`record.ts` writes `recordings/*.json` in nano-connector's preview format
+(`Recorded`: host, path, query, status, headers, body), the request sequence
+each spec makes, plus `*.state.json` program states for delta runs. The Rust
+tests and `nano-connector preview <spec> <recording>` replay them. Regenerate
+after a mock change with `deno run --allow-read --allow-write
+testing/directory-mocks/record.ts`; `mocks.test.ts` fails on stale recordings.
+The identity shadow runs in `shadow/shadow.test.ts` use the same mocks and skip
+until the engine knows `kind: identity`.
