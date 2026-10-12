@@ -58,7 +58,9 @@ const ACTIVATED_2H_AGO = new Date((NOW - 7200) * 1000).toISOString();
 
 function makeCtx(
   cursors: Record<string, string | undefined>,
-  start: { initialCursor?: string; backfillFrom?: string } = { initialCursor: ACTIVATED_2H_AGO },
+  start: { initialCursors?: Record<string, string>; initialCursor?: string; backfillFrom?: string } = {
+    initialCursor: ACTIVATED_2H_AGO,
+  },
 ) {
   const emitted: SlackLogin[] = [];
   const checkpoints: string[] = [];
@@ -162,16 +164,52 @@ function historyAroundStart(): SlackLogin[] {
 Deno.test("NAN-3697 initialCursorMs: initialCursor, clamped alias, else now - 300 s", () => {
   const log = () => {};
   assertEquals(INITIAL_OVERLAP_MS, 300_000);
-  assertEquals(initialCursorMs({ initialCursor: iso(FAKE_NOW_S - 300), log }, FAKE_NOW_MS), FAKE_NOW_MS - 300_000);
-  assertEquals(initialCursorMs({ log }, FAKE_NOW_MS), FAKE_NOW_MS - 300_000);
-  assertEquals(initialCursorMs({ initialCursor: "garbage", log }, FAKE_NOW_MS), FAKE_NOW_MS - 300_000);
+  assertEquals(initialCursorMs({ initialCursor: iso(FAKE_NOW_S - 300), log }, "access_logs", FAKE_NOW_MS), FAKE_NOW_MS - 300_000);
+  assertEquals(initialCursorMs({ log }, "access_logs", FAKE_NOW_MS), FAKE_NOW_MS - 300_000);
+  assertEquals(initialCursorMs({ initialCursor: "garbage", log }, "access_logs", FAKE_NOW_MS), FAKE_NOW_MS - 300_000);
   // An old host's operator backfill is clamped: never earlier than now - 300 s.
-  assertEquals(initialCursorMs({ backfillFrom: iso(FAKE_NOW_S - 30 * 86400), log }, FAKE_NOW_MS), FAKE_NOW_MS - 300_000);
+  assertEquals(initialCursorMs({ backfillFrom: iso(FAKE_NOW_S - 30 * 86400), log }, "access_logs", FAKE_NOW_MS), FAKE_NOW_MS - 300_000);
   // initialCursor wins over a far-past alias.
   assertEquals(
-    initialCursorMs({ initialCursor: iso(FAKE_NOW_S - 300), backfillFrom: iso(FAKE_NOW_S - 30 * 86400), log }, FAKE_NOW_MS),
+    initialCursorMs({ initialCursor: iso(FAKE_NOW_S - 300), backfillFrom: iso(FAKE_NOW_S - 30 * 86400), log }, "access_logs", FAKE_NOW_MS),
     FAKE_NOW_MS - 300_000,
   );
+});
+
+Deno.test("NAN-3697 initialCursorMs: initialCursors[stream] wins; other streams' entries and garbage fall back", () => {
+  const log = () => {};
+  const both = { initialCursors: { access_logs: iso(FAKE_NOW_S - 60) }, initialCursor: iso(FAKE_NOW_S - 3600), log };
+  assertEquals(initialCursorMs(both, "access_logs", FAKE_NOW_MS), FAKE_NOW_MS - 60_000);
+  // Another stream's entry is not this stream's start.
+  assertEquals(initialCursorMs(both, "other", FAKE_NOW_MS), FAKE_NOW_MS - 3_600_000);
+  // An unparseable per-stream entry falls back to initialCursor, then the clamped alias.
+  assertEquals(
+    initialCursorMs({ initialCursors: { access_logs: "garbage" }, initialCursor: iso(FAKE_NOW_S - 3600), log }, "access_logs", FAKE_NOW_MS),
+    FAKE_NOW_MS - 3_600_000,
+  );
+  assertEquals(
+    initialCursorMs({ initialCursors: {}, backfillFrom: iso(FAKE_NOW_S - 30 * 86400), log }, "access_logs", FAKE_NOW_MS),
+    FAKE_NOW_MS - 300_000,
+  );
+});
+
+Deno.test("NAN-3697 slack: per-stream initialCursors wins over initialCursor", async () => {
+  const api = stubApi(historyAroundStart);
+  try {
+    await atFakeNow(async () => {
+      const h = makeCtx({}, {
+        initialCursors: { access_logs: iso(FAKE_NOW_S - 100) },
+        initialCursor: iso(FAKE_NOW_S - 300),
+        backfillFrom: iso(FAKE_NOW_S - 300),
+      });
+      await collect(h.ctx as never);
+      // U-mid (now - 299) is after initialCursor but before this stream's own start.
+      assertEquals(h.emitted.map((l) => l.user_id), ["U-new"]);
+      assertEquals(h.checkpoints, [String(FAKE_NOW_S - 10)]);
+    });
+  } finally {
+    api.restore();
+  }
 });
 
 Deno.test("NAN-3697 slack: no cursor starts exactly at initialCursor (now - 300 s)", async () => {

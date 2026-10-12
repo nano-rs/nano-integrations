@@ -106,8 +106,16 @@ try {
       config: input.config ?? {},
       streams: input.streams ?? [],
       cursors: input.cursors ?? {},
-      // The host's first-run start (NAN-3697), plus the deprecated alias the
+      // The host's first-run start (NAN-3697): per stream for streams with no
+      // cursor, the earliest of those, plus the deprecated alias the
       // production host still sends with the same value.
+      initialCursors: input.initial_cursor
+        ? Object.fromEntries(
+          (input.streams ?? [])
+            .filter((s: string) => !(input.cursors ?? {})[s])
+            .map((s: string) => [s, input.initial_cursor]),
+        )
+        : undefined,
       initialCursor: input.initial_cursor ?? undefined,
       backfillFrom: input.initial_cursor ?? undefined,
       emit: async (stream: string, events: unknown[]) => {

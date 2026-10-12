@@ -4,8 +4,12 @@ category: collector
 description: "Pull sign-in, MFA, user lifecycle, group and admin events from the Okta System Log API"
 icon: shield
 author: nano
-version: 3
+version: 4
 changelog: >-
+  v4: start at the stream's own activation (NAN-3697). The collector now
+  reads the host's per-stream initialCursors[stream] first, then
+  initialCursor, then the deprecated backfillFrom alias, so older hosts keep
+  working unchanged. Existing cursors are resumed unchanged.
   v3: start point-forward (NAN-3697). A new instance now starts at the
   activation time minus 5 minutes instead of now, so the first poll does not
   miss events from the minutes around activation. Existing cursors are resumed

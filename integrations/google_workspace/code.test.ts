@@ -67,7 +67,9 @@ const ACTIVATED_2H_AGO = new Date(Date.now() - 2 * 60 * 60 * 1000 - INITIAL_OVER
 
 function makeCtx(
   cursors: Record<string, string | undefined>,
-  start: { initialCursor?: string; backfillFrom?: string } = { initialCursor: ACTIVATED_2H_AGO },
+  start: { initialCursors?: Record<string, string>; initialCursor?: string; backfillFrom?: string } = {
+    initialCursor: ACTIVATED_2H_AGO,
+  },
 ) {
   const emitted: Activity[] = [];
   const checkpoints: string[] = [];
@@ -454,6 +456,26 @@ Deno.test("NAN-3697 gws: an existing cursor is resumed, never reset to a later i
       assertEquals(api.startTimes[0], older);
       assertEquals(h.emitted.map((a) => a.id.uniqueQualifier), ["backlog"]);
       assertEquals(JSON.parse(cursors.admin as string).t, isoAt(FAKE_NOW_MS - 5 * 86400_000));
+    });
+  } finally {
+    api.restore();
+  }
+});
+
+Deno.test("NAN-3697 gws: per-stream initialCursors wins over initialCursor", async () => {
+  // The admin stream was enabled two minutes ago; initialCursor is the earliest
+  // start across streams (an hour ago). The admin stream must not reach back to it.
+  const api = stubApi({
+    admin: [activity(isoAt(FAKE_NOW_MS - 30 * 60_000), "before-own-start"), activity(isoAt(FAKE_NOW_MS - 60_000), "new")],
+  });
+  try {
+    await atFakeNow(async () => {
+      const own = isoAt(FAKE_NOW_MS - 120_000);
+      const earliest = isoAt(FAKE_NOW_MS - 3_600_000);
+      const h = makeCtx({}, { initialCursors: { admin: own, login: earliest }, initialCursor: earliest, backfillFrom: earliest });
+      await collect(h.ctx as never);
+      assertEquals(api.startTimes[0], own);
+      assertEquals(h.emitted.map((a) => a.id.uniqueQualifier), ["new"]);
     });
   } finally {
     api.restore();

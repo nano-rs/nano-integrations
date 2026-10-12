@@ -374,7 +374,12 @@ interface CollectorContext {
   credentials: Record<string, string>;
   config: Record<string, string>;
   streams: string[];
-  /** First-run start, ISO-8601: activation time − 5 min, computed by the host (NAN-3697). */
+  /**
+   * Per-stream first-run start, ISO-8601: each stream's recorded activation −
+   * 5 min, present only for streams with no cursor. Newer hosts only (NAN-3697).
+   */
+  initialCursors?: Record<string, string | undefined>;
+  /** First-run start, ISO-8601: the earliest per-stream start (activation − 5 min), computed by the host (NAN-3697). */
   initialCursor?: string;
   /** Deprecated alias of `initialCursor`, carrying the same value. */
   backfillFrom?: string;
@@ -398,16 +403,31 @@ export const INITIAL_OVERLAP_MS = 300_000;
 /**
  * Epoch ms a stream with no cursor starts at.
  *
- * `initialCursor` wins. `backfillFrom` is read only as the deprecated alias an
- * older host sends — and clamped, because on such a host it may still be an
- * operator backfill. With neither, now − INITIAL_OVERLAP_MS. Never earlier
- * than that, never all-history.
+ * `initialCursors[stream]` wins: that stream's own start (its recorded
+ * activation − 5 min), sent by hosts with per-stream activation. Then
+ * `initialCursor`, the earliest of those (or the only value an older host
+ * sends). `backfillFrom` is read only as the deprecated alias an older host
+ * sends — and clamped, because on such a host it may still be an operator
+ * backfill. With none, now − INITIAL_OVERLAP_MS. Never earlier than that
+ * floor via the alias, never all-history.
  */
 export function initialCursorMs(
-  ctx: { initialCursor?: string; backfillFrom?: string; log(msg: string, fields?: Record<string, unknown>): void },
+  ctx: {
+    initialCursors?: Record<string, string | undefined>;
+    initialCursor?: string;
+    backfillFrom?: string;
+    log(msg: string, fields?: Record<string, unknown>): void;
+  },
+  stream: string,
   now: number = Date.now(),
 ): number {
   const floor = now - INITIAL_OVERLAP_MS;
+  const perStream = ctx.initialCursors?.[stream];
+  if (perStream) {
+    const parsed = Date.parse(perStream);
+    if (!Number.isNaN(parsed)) return parsed;
+    ctx.log("Ignoring unparseable initialCursors entry", { stream, value: perStream });
+  }
   if (ctx.initialCursor) {
     const parsed = Date.parse(ctx.initialCursor);
     if (!Number.isNaN(parsed)) return parsed;
@@ -428,7 +448,7 @@ async function collect(ctx: CollectorContext): Promise<void> {
   const baseUrl = baseUrlFromDomain(ctx.config.OKTA_DOMAIN ?? "");
   // Point-forward (NAN-3697): no cursor starts at the host's initial cursor.
   // An existing cursor is resumed by pullSystemLog and never reset.
-  const startFrom = new Date(initialCursorMs(ctx)).toISOString();
+  const startFrom = new Date(initialCursorMs(ctx, STREAM)).toISOString();
 
   const result = await pullSystemLog(
     { baseUrl, token, startFrom },

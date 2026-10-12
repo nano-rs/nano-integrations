@@ -16,8 +16,9 @@ const FAKE_NOW_S = FAKE_NOW_MS / 1000;
 const isoAt = (s: number) => new Date(s * 1000).toISOString();
 
 async function run(
-  start: { initialCursor?: string; backfillFrom?: string },
+  start: { initialCursors?: Record<string, string>; initialCursor?: string; backfillFrom?: string },
   cursors: Record<string, string | undefined> = {},
+  streams: string[] = ["alert"],
 ): Promise<{ operations: string[]; checkpoints: string[] }> {
   const operations: string[] = [];
   const checkpoints: string[] = [];
@@ -40,7 +41,7 @@ async function run(
       cursors,
       credentials: { API_TOKEN: "ns-token" },
       config: { TENANT_HOST: "acme.goskope.com" },
-      streams: ["alert"],
+      streams,
       emit: () => Promise.resolve(),
       checkpoint: (s: string, c: string) => {
         checkpoints.push(c);
@@ -85,4 +86,26 @@ Deno.test("NAN-3697 netskope: an open iterator is resumed, never re-opened at a 
   assertEquals(open.operations, ["next"]);
   const resend = await run({ initialCursor: isoAt(FAKE_NOW_S - 300) }, { alert: "resend" });
   assertEquals(resend.operations, ["resend"]);
+});
+
+Deno.test("NAN-3697 netskope: per-stream initialCursors wins over initialCursor, per iterator", async () => {
+  // `alert` was enabled an hour ago; `page` was enabled two minutes ago. The
+  // host's initialCursor is the earliest of the two; `page` must not open there.
+  const r = await run(
+    {
+      initialCursors: { alert: isoAt(FAKE_NOW_S - 3600), page: isoAt(FAKE_NOW_S - 120) },
+      initialCursor: isoAt(FAKE_NOW_S - 3600),
+      backfillFrom: isoAt(FAKE_NOW_S - 3600),
+    },
+    {},
+    ["alert", "page"],
+  );
+  assertEquals(r.operations, [String(FAKE_NOW_S - 3600), String(FAKE_NOW_S - 120)]);
+  // A stream missing from initialCursors falls back to initialCursor.
+  const fallback = await run(
+    { initialCursors: { page: isoAt(FAKE_NOW_S - 120) }, initialCursor: isoAt(FAKE_NOW_S - 3600) },
+    {},
+    ["alert", "page"],
+  );
+  assertEquals(fallback.operations, [String(FAKE_NOW_S - 3600), String(FAKE_NOW_S - 120)]);
 });
