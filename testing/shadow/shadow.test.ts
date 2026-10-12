@@ -60,7 +60,7 @@ type Manifest = {
   connector_spec?: string;
   hosted_connector_spec?: string;
   credential_fields?: { name: string }[];
-  config_fields?: { name: string }[];
+  config_fields?: { name: string; required?: boolean }[];
   streams?: Stream[];
   categories?: string[];
   components?: Component[];
@@ -70,6 +70,41 @@ type Spec = { kind?: string; auth?: Record<string, string>; streams: SpecStream[
 
 /** NAN-3503: identity streams feed nano's identity snapshot, never ingest. */
 const IDENTITY_LANE = "nano_identity";
+
+/**
+ * Config keys a spec reads that the manifest must mark `required: true`.
+ * A `{{config.X}}` template anywhere but a query value (host, url, auth,
+ * headers, body, state) renders empty when the field is unset, so the run
+ * fails: required. A query value that renders empty is dropped by the engine,
+ * which is a working default (Slack's optional TEAM_ID). A program read
+ * `.config.X` is optional only when it is coalesced (`(.config.X) ?? ...`);
+ * a coalesce to a value the run cannot use (an empty host) is not caught
+ * here, which is why every host/url template is checked above.
+ * STREAMS is filled by nano.
+ */
+function configNeedsRequired(spec: unknown, text: string): Set<string> {
+  const need = new Set<string>();
+  const walk = (v: unknown, inQuery: boolean, key: string) => {
+    if (typeof v === "string") {
+      if (key === "program") return;
+      for (const m of v.matchAll(/\{\{\s*config\.([A-Z0-9_]+)/g)) if (!inQuery) need.add(m[1]);
+    } else if (Array.isArray(v)) v.forEach((x) => walk(x, inQuery, key));
+    else if (v && typeof v === "object") {
+      for (const [k, x] of Object.entries(v)) walk(x, inQuery || k === "query", k);
+    }
+  };
+  walk(spec, false, "");
+  for (const m of text.matchAll(/\.config\.([A-Z0-9_]+)(\)?\s*\?\?)?/g)) if (!m[2]) need.add(m[1]);
+  need.delete("STREAMS");
+  return need;
+}
+
+/** Problems for config keys `specText` needs that the manifest leaves optional or undeclared. */
+function requiredConfigProblems(where: string, m: Manifest, specText: string): string[] {
+  const required = new Set((m.config_fields ?? []).filter((f) => f.required === true).map((f) => f.name));
+  return [...configNeedsRequired(parse(specText), specText)].filter((k) => !required.has(k))
+    .map((k) => `${where}: spec needs config ${k}, which the manifest does not mark required: true`);
+}
 
 /** Every `{{config.X}}` / `.config.X` a spec text reads. */
 const configReads = (text: string) => [...text.matchAll(/(?:\{\{\s*config\.|\.config\.)([A-Z0-9_]+)/g)].map((m) => m[1]);
@@ -100,6 +135,7 @@ async function checkHostedTwin(slug: string, where: string, specFile: string, sp
   for (const k of configReads(hostedText)) {
     if (!configs.has(k)) problems.push(`${where}: hosted spec reads config ${k}, which the manifest does not declare`);
   }
+  problems.push(...requiredConfigProblems(`${where}/${hostedFile}`, await manifest(slug), hostedText));
   return problems;
 }
 
@@ -428,6 +464,7 @@ Deno.test("every connector.yaml is declared by its manifest and only uses declar
     for (const k of configReads(text)) {
       if (!configs.has(k)) problems.push(`${where}: spec reads config ${k}, which the manifest does not declare`);
     }
+    problems.push(...requiredConfigProblems(`${where}/connector.yaml`, m, text));
     const s = parse(text) as Spec;
     for (const [k, v] of Object.entries(s.auth ?? {})) {
       if ((k === "credential" || k.endsWith("_credential")) && !creds.has(v)) problems.push(`${where}: auth uses credential ${v}, which the manifest does not declare`);
@@ -514,6 +551,7 @@ Deno.test("every manifest component is well-formed and its identity specs are de
         }
         const s = parse(text) as Spec;
         problems.push(...checkIdentitySpec(`${cw}/${c.connector_spec}`, s));
+        problems.push(...requiredConfigProblems(`${cw}/${c.connector_spec}`, m, text));
         const allowed = c.config_fields ? new Set(c.config_fields) : configs;
         for (const k of configReads(text)) {
           if (!configs.has(k)) problems.push(`${cw}: spec reads config ${k}, which the manifest does not declare`);
@@ -534,4 +572,24 @@ Deno.test("every manifest component is well-formed and its identity specs are de
   }
   assert(identity >= 3, `only ${identity} identity components found`);
   assertEquals(problems, []);
+});
+
+// Guards the guard: an auth/url template on an optional field is caught; a
+// query value or a coalesced program read is not.
+Deno.test("the required-config check catches an optional field a spec cannot run without", () => {
+  const text = [
+    "auth: { type: okta_broker_jwt, okta_domain: \"{{config.DOMAIN}}\", client_id: \"{{config.CLIENT_ID}}\" }",
+    "streams:",
+    "  - id: s",
+    "    request: { url: \"https://{{config.DOMAIN}}/x\", query: { team: \"{{config.TEAM}}\" } }",
+    "    program: |",
+    "      a = string(.config.OPTIONAL) ?? \"\"",
+    "      b = .config.NEEDED",
+  ].join("\n");
+  assertEquals([...configNeedsRequired(parse(text), text)].sort(), ["CLIENT_ID", "DOMAIN", "NEEDED"]);
+  const m = { slug: "x", config_fields: [{ name: "DOMAIN", required: true }, { name: "CLIENT_ID", required: false }, { name: "TEAM" }] } as Manifest;
+  assertEquals(requiredConfigProblems("x", m, text), [
+    "x: spec needs config CLIENT_ID, which the manifest does not mark required: true",
+    "x: spec needs config NEEDED, which the manifest does not mark required: true",
+  ]);
 });
