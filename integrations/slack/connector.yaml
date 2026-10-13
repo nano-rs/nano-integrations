@@ -11,6 +11,10 @@ allow:
   - host: slack.com
     path_prefixes: ["/api/team.accessLogs"]
 auth: { type: bearer, credential: USER_TOKEN }
+# Hourly on purpose, not the 5 min pull default (NAN-3783): team.accessLogs
+# returns per-(user, ip, user agent) aggregates whose date_last moves on every
+# login, so each poll re-ships every touched aggregate as a new version. Slack
+# documents no minimum interval (Tier 2, 20+/min); this is a volume floor.
 schedule: "0 * * * *"
 limits: { max_run_secs: 300, max_pages: 100 }
 rate_limit: { min_interval_ms: 3000, max_retries_429: 5, max_wait_ms: 60000 }
