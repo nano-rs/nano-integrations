@@ -18,7 +18,9 @@ auth:
   token_url: "https://oauth2.googleapis.com/token"
   scope: "https://www.googleapis.com/auth/admin.reports.audit.readonly"
   subject: "{{config.ADMIN_EMAIL}}"
-schedule: "*/10 * * * *"
+# Every 5 min (NAN-3783, the pull default). The Reports API has no documented
+# minimum poll interval; lookback_secs below re-reads 10 min for late events.
+schedule: "*/5 * * * *"
 limits: { max_run_secs: 600, max_pages: 2000 }
 rate_limit: { min_interval_ms: 250, max_retries_429: 5, max_wait_ms: 60000 }
 streams:

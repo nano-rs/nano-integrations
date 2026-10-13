@@ -152,7 +152,7 @@ streams:
 config:
   # Hosted UI uses source-bound connector feeds; dedicated Deno remains unchanged.
   hosted_connector: true
-  poll_schedule: "*/10 * * * *"
+  poll_schedule: "*/5 * * * *"
   max_run_secs: 600
   max_events_per_emit: 1000
 
