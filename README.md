@@ -2,11 +2,13 @@
 
 Official integration catalog for [nano](https://nano.rs). Collectors that pull
 events out of third-party SaaS platforms using your own credentials and land
-them in nano — no agent to deploy, no log forwarder to run.
+them in nano. There is no agent to deploy and no log forwarder to run.
 
 ## Using this catalog
 
-nano syncs this repository by default — open **Marketplace**, find the
+nano installs this catalog by default. Every install receives it as a signed
+content bundle published by app.nano.rs, and nano does not accept third-party
+catalogs. Open **Marketplace**, find the
 integration, and install it. Then open its **Connections** tab, supply
 credentials, pick the event streams you want, and nano starts pulling.
 
@@ -14,7 +16,7 @@ Each enabled stream becomes a log source, so collection shows up in
 **Ingestion → Log Sources** alongside every other feed.
 
 <details>
-<summary>Adding it manually (older installs, or your own fork)</summary>
+<summary>Adding it manually (older installs)</summary>
 
 There is currently no UI for adding a marketplace repository, so this is an API
 call:
@@ -28,7 +30,8 @@ curl -X POST https://<your-nano>/api/marketplace/repos \
        "auto_sync_enabled":true}'
 ```
 
-`enrichments_path` is the content path — the field name predates collectors.
+`enrichments_path` is the content path; the field name predates collectors.
+Only `github.com/nano-rs` repositories are accepted.
 
 </details>
 
@@ -55,7 +58,7 @@ nano's marketplace sync records both, plus the spec's `connector_spec_sha256`, o
 the catalog entry, so the platform can tell connector-only integrations apart
 from Deno ones without reading the repo.
 
-**`slack` needs the `admin` user scope, which is not offered on Pro** — verified
+**`slack` needs the `admin` user scope, which is not offered on Pro**, verified
 on a Pro workspace, where it does not appear in the scope picker at all. The
 `team.accessLogs` method is documented as Pro/Business+, but the scope that
 unlocks it is not, so in practice this needs Business+ or Enterprise Grid. Check
@@ -91,13 +94,13 @@ integrations/
     code.ts
 ```
 
-- `manifest.yaml` — identity, credential and config fields, allowed outbound
+- `manifest.yaml`: identity, credential and config fields, allowed outbound
   domains, and the list of event streams the integration can pull.
-- `connector.yaml` — the declarative nano connector spec (NAN-3490) that
+- `connector.yaml`: the declarative nano connector spec (NAN-3490) that
   replaces `code.ts`. The manifest's `runtime` says which of the two runs;
   see [SCHEMA.md](SCHEMA.md#runtime). The spec format is documented in
   nanosiem's `nano-connector/docs/AUTHORING.md`.
-- `code.ts` — TypeScript that runs in nano's Deno sandbox and does the pulling.
+- `code.ts`: TypeScript that runs in nano's Deno sandbox and does the pulling.
   It stays until the cutover to the connector engine, then goes away.
 
 Custom Deno collectors written outside this repo have no conversion path; they
@@ -108,13 +111,13 @@ exactly what `code.ts` ships against the same mock, and the stream's parser
 derives a stable `metadata.uid`). See [testing/README.md](testing/README.md).
 
 Field mapping is **not** done here. Collectors emit raw vendor events; the
-[parsers repo](https://github.com/nano-rs/parsers) maps them to OCSF/UDM. Keep
+[parsers repo](https://github.com/nano-rs/parsers) maps them to OCSF. Keep
 VRL out of this repo.
 
 ## Writing a collector
 
 A collector exports a single `collect` function. It receives credentials and
-config at call time — never hard-code secrets.
+config at call time. Never hard-code secrets.
 
 ```typescript
 async function collect(ctx: CollectorContext): Promise<void> {
@@ -154,7 +157,7 @@ export { collect };
 
 Every collector starts point-forward (NAN-3697). A stream with no cursor starts
 at `ctx.initialCursors[streamId]` (that stream's activation − 5 minutes), else
-`ctx.initialCursor` — never earlier, never "all the
+`ctx.initialCursor`, never earlier, never "all the
 history the vendor holds". There is no backfill option. An existing cursor is
 always resumed and never reset; a cursor that cannot be read restarts at the
 initial cursor and should log loudly.
@@ -178,7 +181,7 @@ to now − 300 s, never to 0.
 
 `emit` → `checkpoint` in that order gives **at-least-once** delivery. If the
 process dies between the two, the next run re-fetches from the last committed
-cursor and re-emits some events. Never checkpoint before emitting — that turns
+cursor and re-emits some events. Never checkpoint before emitting; that turns
 a crash into silent data loss.
 
 Duplicates are expected and acceptable. Do not build dedup into a collector.
@@ -194,7 +197,7 @@ Duplicates are expected and acceptable. Do not build dedup into a collector.
    conflict if you consume the same cursor concurrently. nano guarantees only
    one run per instance at a time; within your own code, keep streams
    sequential unless you know the API tolerates parallelism.
-4. **Emit raw.** Do not reshape, rename, or flatten vendor fields — the parser
+4. **Emit raw.** Do not reshape, rename, or flatten vendor fields: the parser
    expects the vendor's native shape. The only thing you own is *which* events
    go to *which* stream.
 5. **Batch sensibly.** One `emit` per API page is right. Emitting per-event
@@ -211,7 +214,7 @@ See [SCHEMA.md](SCHEMA.md).
 Open a PR with your integration directory. Include, in the PR description: the
 vendor's API docs URL, which auth type it needs, and what the rate limits and
 retention windows are. If the vendor drops undelivered events after a fixed
-window, say so — that becomes a documented SLA for operators.
+window, say so; that becomes a documented SLA for operators.
 
 ## License
 
